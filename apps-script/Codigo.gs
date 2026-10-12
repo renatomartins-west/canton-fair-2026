@@ -10,7 +10,10 @@
  *   editarProduto    {token, p}               -> altera campos e/ou troca fotos de um produto
  *   excluirProduto   {token, id}              -> apaga (so quem registrou ou o administrador)
  *   editarFornecedor {token, f} / excluirFornecedor {token, id}
- *   foto             {token, id}              -> foto em alta (base64) de produto ou cartao
+ *   foto             {token, id}              -> foto em alta (base64) ou arquivo JSON (caderno/anotacoes)
+ *   salvarPagina {token, g} / excluirPagina {token, id}  -> caderno do estande (iPad)
+ *   salvarAnotacao {token, a}                 -> desenho da Pencil sobre uma foto do produto
+ *   favorito {token, id, on}                  -> marca/desmarca o produto como favorito do usuario
  */
 
 const CFG = {
@@ -31,7 +34,8 @@ function doPost(e) {
   try {
     const d = JSON.parse(e.postData.contents || '{}');
     const acoes = { pedirCodigo, entrar, dados, imagens, salvarFornecedor, salvarProduto,
-      editarProduto, excluirProduto, editarFornecedor, excluirFornecedor, foto };
+      editarProduto, excluirProduto, editarFornecedor, excluirFornecedor, foto,
+      salvarPagina, excluirPagina, salvarAnotacao, favorito };
     const fn = acoes[d.acao];
     if (!fn) return out({ ok: false, erro: 'acao desconhecida' });
     return out(fn(d));
@@ -118,6 +122,10 @@ function dados(d) {
   const res = { ok: true, agora: fmt_(new Date()), produtos: prod, fornecedores: forn,
     apagados: { produtos: log.filter(m => m.d && m.k === 'p').map(m => m.id), fornecedores: log.filter(m => m.d && m.k === 'f').map(m => m.id) } };
   if (!desde) { res.projetos = tabela_(CFG.PROJETOS); res.times = tabela_(CFG.TIMES); }
+  // caderno e anotacoes: listas pequenas, vao sempre inteiras
+  const cad = caderno_();
+  res.paginas = linhas_(cad.getSheetByName('Paginas')).map(r => Object.assign(r, { thumb: thumbs[r.ID_Pagina] || '' }));
+  res.anotacoes = linhas_(cad.getSheetByName('Anotacoes'));
   return res;
 }
 
@@ -297,8 +305,96 @@ function foto(d) {
   usuario_(d.token);
   const f = DriveApp.getFileById(idDaUrl_(d.id) || d.id);
   const pais = []; const it = f.getParents(); while (it.hasNext()) pais.push(it.next().getName());
-  if (!pais.some(n => n === 'Fotos_Produtos' || n === 'Fotos_Cartoes')) throw new Error('Foto não permitida.');
+  if (!pais.some(n => ['Fotos_Produtos', 'Fotos_Cartoes', 'Caderno', 'Anotacoes'].indexOf(n) >= 0)) throw new Error('Foto não permitida.');
+  if (/json/.test(f.getMimeType()) || /\.json$/.test(f.getName())) return { ok: true, texto: f.getBlob().getDataAsString() };
   return { ok: true, foto: 'data:' + f.getMimeType() + ';base64,' + Utilities.base64Encode(f.getBlob().getBytes()) };
+}
+
+// ---------------- caderno, anotacoes e favoritos (iPad) ----------------
+// Planilha propria do app (CF26_Caderno), criada uma vez; o ID fica nas propriedades do script.
+function caderno_() {
+  const pr = PropertiesService.getScriptProperties();
+  let id = pr.getProperty('CADERNO_ID'); let ss = null;
+  if (id) try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; }
+  if (!ss) {
+    ss = SpreadsheetApp.create('CF26_Caderno');
+    DriveApp.getFileById(ss.getId()).moveTo(DriveApp.getFolderById(CFG.PASTA_APP));
+    const a = ss.getSheets()[0]; a.setName('Paginas');
+    a.appendRow(['ID_Pagina', 'Titulo', 'ID_Fornecedor', 'ID_Produto', 'Imagem', 'Tracos', 'Registrado_Por', 'Data_Hora', 'Criada_Em']);
+    const b = ss.insertSheet('Anotacoes');
+    b.appendRow(['ID_Anotacao', 'ID_Produto', 'Foto', 'Imagem', 'Tracos', 'Registrado_Por', 'Data_Hora']);
+    pr.setProperty('CADERNO_ID', ss.getId());
+  }
+  return ss;
+}
+function linhas_(sh) {
+  const v = sh.getDataRange().getValues(); const h = v.shift().map(String);
+  return v.filter(r => r[0] !== '' && r[0] !== null).map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] instanceof Date ? fmt_(r[i]) : r[i]); return o; });
+}
+function salvaArquivo_(pasta, nome, conteudo, tipo) {
+  return pasta.createFile(Utilities.newBlob(conteudo, tipo, nome)).getUrl();
+}
+function salvarPagina(d) {
+  const email = usuario_(d.token); const g = d.g || {};
+  if (!g.ID_Pagina) throw new Error('sem ID');
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = caderno_().getSheetByName('Paginas'); const row = linhaDe_(sh, g.ID_Pagina);
+    const o = row > 0 ? objeto_(sh, row) : { ID_Pagina: g.ID_Pagina, Registrado_Por: email, Criada_Em: g.Criada_Em || fmt_(new Date()) };
+    ['Titulo', 'ID_Fornecedor', 'ID_Produto'].forEach(k => { if (g[k] !== undefined) o[k] = g[k]; });
+    const pasta = pastaFotos_('Caderno'); const marca = Date.now();
+    if (g.json) { lixo_(o.Tracos); o.Tracos = salvaArquivo_(pasta, g.ID_Pagina + '_' + marca + '.json', g.json, 'application/json'); }
+    if (g.imagem) { lixo_(o.Imagem); o.Imagem = salvaFoto_(pasta, g.ID_Pagina + '_' + marca, g.imagem); }
+    o.Data_Hora = fmt_(new Date());
+    if (row > 0) gravaObjeto_(sh, row, o); else sh.appendRow(porCabecalho_(sh, o));
+    if (g.thumb) miniatura_(g.ID_Pagina, g.thumb);
+    return { ok: true, linha: o };
+  } finally { lock.releaseLock(); }
+}
+function excluirPagina(d) {
+  const email = usuario_(d.token);
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = caderno_().getSheetByName('Paginas'); const row = linhaDe_(sh, d.id);
+    if (row < 0) return { ok: true, jaApagado: true };
+    const o = objeto_(sh, row);
+    if (!podeApagar_(email, o.Registrado_Por)) throw new Error('Só quem criou a página pode apagar.');
+    lixo_(o.Tracos); lixo_(o.Imagem); sh.deleteRow(row); miniatura_(d.id, '');
+    return { ok: true };
+  } finally { lock.releaseLock(); }
+}
+function salvarAnotacao(d) {
+  const email = usuario_(d.token); const a = d.a || {};
+  if (!a.ID_Produto || !a.Foto) throw new Error('sem ID');
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = caderno_().getSheetByName('Anotacoes'); const id = a.ID_Produto + '_' + a.Foto;
+    const row = linhaDe_(sh, id); const o = row > 0 ? objeto_(sh, row) : { ID_Anotacao: id, ID_Produto: a.ID_Produto, Foto: a.Foto };
+    if (o.Tracos) lixo_(o.Tracos); if (o.Imagem) lixo_(o.Imagem);
+    if (!a.json) { if (row > 0) sh.deleteRow(row); return { ok: true, apagada: true }; }
+    const pasta = pastaFotos_('Anotacoes'); const marca = Date.now();
+    o.Tracos = salvaArquivo_(pasta, id + '_' + marca + '.json', a.json, 'application/json');
+    o.Imagem = a.imagem ? salvaFoto_(pasta, id + '_' + marca, a.imagem) : '';
+    o.Registrado_Por = email; o.Data_Hora = fmt_(new Date());
+    if (row > 0) gravaObjeto_(sh, row, o); else sh.appendRow(porCabecalho_(sh, o));
+    return { ok: true, linha: o };
+  } finally { lock.releaseLock(); }
+}
+function favorito(d) {
+  const email = usuario_(d.token);
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = SpreadsheetApp.openById(CFG.PRODUTOS).getSheets()[0];
+    let h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+    let col = h.indexOf('Favoritos') + 1;
+    if (!col) { col = h.length + 1; sh.getRange(1, col).setValue('Favoritos'); }
+    const row = linhaDe_(sh, d.id); if (row < 0) throw new Error('Produto não encontrado (pode ter sido apagado).');
+    const atual = String(sh.getRange(row, col).getValue() || '').split(',').map(x => x.trim()).filter(Boolean).filter(x => x !== email);
+    if (d.on) atual.push(email);
+    sh.getRange(row, col).setValue(atual.join(', '));
+    registraMudanca_('p', d.id, false);
+    return { ok: true, favoritos: atual.join(', ') };
+  } finally { lock.releaseLock(); }
 }
 
 // Rode uma vez pelo editor para autorizar planilhas, Drive e e-mail.

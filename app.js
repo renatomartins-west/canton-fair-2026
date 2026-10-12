@@ -65,8 +65,24 @@ async function guardaFotos(id, arr, deOutro) {
 }
 async function apagaFotos(id) { delete FOTOS[id]; await kvDel('fotos:' + id); }
 
-const S = { token: null, email: null, projetos: [], times: [], produtos: [], fornecedores: [], outbox: [], img: null, agora: '', lastSup: null };
-const saveCore = () => Promise.all([kvSet('produtos', S.produtos), kvSet('fornecedores', S.fornecedores), kvSet('agora', S.agora)]);
+const S = { token: null, email: null, projetos: [], times: [], produtos: [], fornecedores: [], paginas: [], anotacoes: [], outbox: [], img: null, agora: '', lastSup: null };
+const saveCore = () => Promise.all([kvSet('produtos', S.produtos), kvSet('fornecedores', S.fornecedores), kvSet('paginas', S.paginas), kvSet('anotacoes', S.anotacoes), kvSet('agora', S.agora)]);
+
+/* arquivos JSON (páginas do caderno e anotações): guardados no celular com o endereço de origem */
+const JSONS = {};
+async function jsonLocal(key) { if (!(key in JSONS)) JSONS[key] = (await kvGet('json:' + key)) || null; return JSONS[key]; }
+async function guardaJson(key, u, t) { JSONS[key] = { u, t }; await kvSet('json:' + key, JSONS[key]); }
+async function apagaJson(key) { delete JSONS[key]; await kvDel('json:' + key); }
+const PEGANDO = new Set();
+// devolve o texto do JSON (do celular ou baixando); null se não der
+async function pegaJson(key, url) {
+  const c = await jsonLocal(key);
+  if (c && (!url || !c.u || c.u === url)) return c.t;
+  if (!url || !navigator.onLine || !S.token || PEGANDO.has(key)) return c ? c.t : null;
+  PEGANDO.add(key);
+  try { const r = await api('foto', { id: url }); await guardaJson(key, url, r.texto); return r.texto; }
+  catch (e) { return c ? c.t : null; } finally { PEGANDO.delete(key); }
+}
 const saveOutbox = () => kvSet('outbox', S.outbox);
 
 /* ================= servidor ================= */
@@ -107,7 +123,7 @@ function faixaAlvo(p) { const ns = String(p && p.FOB_Alvo || '').match(/\d+([.,]
 /* ================= navegação ================= */
 const st = { stack: [{ v: 'home' }], q: '', form: null, ns: null, dd: false, ddq: '' };
 const cur = () => st.stack[st.stack.length - 1];
-function go(view) { cur().scroll = $('scr').scrollTop; st.stack.push(view); render(0); }
+function go(view) { guardaRolagem(); cur().scroll = $('scr').scrollTop; st.stack.push(view); render(0); }
 function back() { if (st.stack.length > 1) st.stack.pop(); render(cur().scroll || 0); }
 function tab(t) { st.stack = [{ v: t }]; st.q = ''; render(0); }
 
@@ -115,7 +131,7 @@ function tab(t) { st.stack = [{ v: t }]; st.q = ''; render(0); }
 let syncing = false;
 function bar(title, canBack) {
   const n = S.outbox.length; const on = navigator.onLine;
-  $('bar').innerHTML = `${canBack ? `<button class="ib" data-go="back" aria-label="Voltar">${I.back}</button>` : ''}<h2>${esc(title)}</h2>
+  $('bar').innerHTML = `<div class="brand">WESTWING · CANTON 26</div>${canBack ? `<button class="ib" data-go="back" aria-label="Voltar">${I.back}</button>` : ''}<h2>${esc(title)}</h2>
    <button class="ib ${syncing ? 'spin' : ''}" data-go="sync" aria-label="Sincronizar">${on ? I.sync : I.off}${n ? `<span class="badge ${on ? '' : 'off'}">${n}</span>` : ''}</button>`;
 }
 function refreshBar() { const v = cur(); render.lastBar && bar(render.lastBar[0], render.lastBar[1]); }
@@ -166,7 +182,7 @@ function vProjeto(id) {
     <div class="g"><div><small>FOB alvo</small>${p.FOB_Alvo ? `<b class="num">${esc(p.FOB_Alvo)}</b>` : '<span class="todo">A preencher</span>'}</div>
     <div><small>MOQ alvo</small>${p.MOQ_Alvo !== '' && p.MOQ_Alvo != null ? `<b class="num">${esc(p.MOQ_Alvo)} pcs</b>` : '<span class="todo">A preencher</span>'}</div>
     <div><small>CMV 12M</small><b class="num">${num(p.CMV_12M) ? brl(num(p.CMV_12M)) : 'Sem dado'}</b></div><div><small>SKUs</small><b class="num">${p.SKUs !== '' && p.SKUs != null ? esc(p.SKUs) : 'Sem dado'}</b></div></div></div>
-   <button class="addp" data-go="novoproj">Adicionar produto encontrado</button>
+   ${LARGO() && ps.length > 1 ? `<div class="duas"><button class="addp" data-go="novoproj">Adicionar produto encontrado</button><button class="addp out" data-go="comparar">Comparar os ${ps.length} achados</button></div>` : '<button class="addp" data-go="novoproj">Adicionar produto encontrado</button>'}
    <div class="sec">Produtos encontrados na feira<span>${ps.length}</span></div>
    ${ps.map((x, i) => rowProduto(x, { semProjeto: true, melhor: i === 0 && ps.length > 1 })).join('') || '<div class="empty">Nenhum ainda.</div>'}<div style="height:24px"></div></div></div>`;
 }
@@ -187,10 +203,10 @@ function podeApagar(x) { return !!x && (x._pend || S.email === ADMIN || String(x
 function urlsProduto(x) { return [1, 2, 3, 4].map((k) => x['Foto_' + k] || ''); }
 // cada foto do produto: alta (se já está no celular), miniatura (enquanto a alta não chega) e endereço no Drive
 function slotsProduto(x) {
-  if (x._pend) return (x.fotos || []).filter(Boolean).map((u) => ({ full: u }));
+  if (x._pend) return (x.fotos || []).filter(Boolean).map((u, k) => ({ k, full: u }));
   const c = FOTOS[x.ID_Produto]; const us = urlsProduto(x); const out = [];
-  for (let k = 0; k < 4; k++) { const full = c && c.f[k] && (!c.u[k] || !us[k] || c.u[k] === us[k]) ? c.f[k] : ''; if (us[k] || full) out.push({ url: us[k], full }); }
-  if (!out.length && x.thumb) out.push({ full: '' });
+  for (let k = 0; k < 4; k++) { const full = c && c.f[k] && (!c.u[k] || !us[k] || c.u[k] === us[k]) ? c.f[k] : ''; if (us[k] || full) out.push({ k, url: us[k], full }); }
+  if (!out.length && x.thumb) out.push({ k: 0, full: '' });
   if (out[0] && !out[0].full) out[0].th = x.thumb;
   return out;
 }
@@ -206,7 +222,7 @@ async function garanteFotos(id, urls, deOutro) {
       if (veio) await guardaFotos(id, c, deOutro);
     }
   } finally { BAIXANDO.delete(id); }
-  const v = cur(); if ((v.v === 'produto' || v.v === 'fornecedor') && v.id === id && !lb) render($('scr').scrollTop);
+  const v = LARGO() ? baseLarga() : cur(); if ((v.id === id || v.sel === id) && !lb && !anotEl) render($('scr').scrollTop);
 }
 let galAtual = [];
 function galeria(slots, vazio) {
@@ -258,6 +274,7 @@ function vFornecedor(id) {
   return `<div class="split"><div class="sl">${galeria(slots, 'Sem foto do cartão').replace('<div class="gal">', '<div class="gal card">')}</div><div class="sr">
    ${fld('Empresa', f.Empresa)}${fld('Contato', f.Contato)}${fld('E-mail', f.Email)}${fld('Telefone / WeChat', f.Telefone_WeChat)}${fld('Estande', f.Estande)}
    ${acoes('forn', f)}
+   ${LARGO() ? `<div class="sec">Caderno<span>${paginasTodas().filter((g) => g.ID_Fornecedor === id).length}</span></div>${paginasTodas().filter((g) => g.ID_Fornecedor === id).map((g) => `<button type="button" class="row pgrow" data-pag="${esc(g.ID_Pagina)}">${g.thumb ? `<img class="th pg" src="${g.thumb}" alt="">` : '<span class="th pg folhinha"></span>'}<div class="t"><div class="t1">${esc(tituloPag(g))}</div><div class="t2">${esc(nomeDe(g.Registrado_Por))}${g.Criada_Em ? ' · ' + esc(quando(g.Criada_Em)) : ''}</div></div></button>`).join('')}<button type="button" class="lnk pad" data-go="novapagforn">+ Nova página do caderno para este fornecedor</button>` : ''}
    <div class="sec">Produtos<span>${ps.length}</span></div>${ps.map((x) => rowProduto(x)).join('') || '<div class="empty">Nenhum produto ligado a este fornecedor.</div>'}<div style="height:24px"></div></div></div>`;
 }
 
@@ -284,6 +301,7 @@ function vForm() {
   <div class="fi"><label for="fMoq">MOQ (pcs)</label><input id="fMoq" inputmode="numeric" value="${esc(f.moq)}" placeholder="0" autocomplete="off"></div>
   <div class="fi"><span class="lab">Interesse</span><div class="enum">${['Alto', 'Médio', 'Baixo'].map((x) => `<button type="button" data-fint="${x}" aria-pressed="${f.int === x}">${x}</button>`).join('')}</div></div>
   <div class="fi"><label for="fNote">Anotações</label><textarea id="fNote" placeholder="MOQ por cor, material, prazo…">${esc(f.nota)}</textarea><div class="hint">Dá para ditar pelo microfone do teclado.</div></div>
+  ${LARGO() ? '<div class="dica"><b>Escreva com a Pencil direto nos campos.</b> O iPad converte a letra em texto na hora (Rabisco), e o FOB já compara com o alvo da buylist.</div>' : ''}
  </div><div class="formbar"><button type="button" data-go="back">Cancelar</button><button type="button" class="save" data-go="salvar">Salvar</button></div>${st.dd ? ddHtml() : ''}`;
 }
 function deltaTxt() {
@@ -320,8 +338,369 @@ function keep() {
   const n = st.ns; if (n && cur().v === 'novoforn') { ['n:nsN', 'ct:nsC', 'em:nsE', 'ph:nsP', 'st:nsS'].forEach((k) => { const [prop, id] = k.split(':'); if ($(id)) n[prop] = $(id).value; }); }
 }
 
+/* ================= iPad (tela larga) =================
+   O iPhone continua com as telas acima. A partir de 768px de largura o app usa menu lateral,
+   lista e detalhe lado a lado, painel de formulário, anotação com a Pencil, caderno e comparação. */
+const LARGO = () => window.innerWidth >= 768;
+const PATH = {
+  home: 'M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z',
+  produtos: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z',
+  forn: 'M20 4H4v2h16V4zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1zm-9 4H6v-4h6v4z',
+  caderno: 'M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z',
+  'Móveis': 'M7 13c1.66 0 3-1.34 3-3S8.66 7 7 7s-3 1.34-3 3 1.34 3 3 3zm12-6h-8v7H3V5H1v15h2v-3h18v3h2v-9c0-2.21-1.79-4-4-4z',
+  'Cozinha': 'M8.1 13.34l2.83-2.83L3.91 3.5a4.008 4.008 0 0 0 0 5.66l4.19 4.18zm6.78-1.81c1.53.71 3.68.21 5.27-1.38 1.91-1.91 2.28-4.65.81-6.12-1.46-1.46-4.2-1.1-6.12.81-1.59 1.59-2.09 3.74-1.38 5.27L3.7 19.87l1.41 1.41L12 14.41l6.88 6.88 1.41-1.41L13.41 13l1.47-1.47z',
+  'Têxtil': 'M21 10.78V8c0-1.65-1.35-3-3-3h-4c-.77 0-1.47.3-2 .78-.53-.48-1.23-.78-2-.78H6C4.35 5 3 6.35 3 8v2.78c-.61.55-1 1.34-1 2.22v6h2v-2h16v2h2v-6c0-.88-.39-1.67-1-2.22zM14 7h4c.55 0 1 .45 1 1v2h-6V8c0-.55.45-1 1-1zM5 8c0-.55.45-1 1-1h4c.55 0 1 .45 1 1v2H5V8z',
+  'Decor': 'M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7zM9 21a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1H9v1z',
+  hl: 'M6 14l3 3v5h6v-5l3-3V9H6v5zm5-12h2v3h-2V2zM3.5 5.88l1.41-1.41 2.12 2.12-1.41 1.41L3.5 5.88zm13.46.71l2.12-2.12 1.41 1.41-2.12 2.12-1.41-1.41z',
+  er: 'M16.24 3.56l4.95 4.94c.78.79.78 2.05 0 2.84L12 20.53a4.008 4.008 0 0 1-5.66 0L2.81 17c-.78-.79-.78-2.05 0-2.84l10.6-10.6c.79-.78 2.05-.78 2.83 0zM4.22 15.58l3.54 3.53c.78.79 2.04.79 2.83 0l3.53-3.53-4.95-4.95-4.95 4.95z',
+  move: 'M10 9h4V6h3l-5-5-5 5h3v3zm-1 1H6V7l-5 5 5 5v-3h3v-4zm14 2l-5-5v3h-3v4h3v3l5-5zm-9 3h-4v3H7l5 5 5-5h-3v-3z',
+  undo: 'M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62A7.95 7.95 0 0 1 12.5 10.5c3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z',
+  redo: 'M18.4 10.6A10.4 10.4 0 0 0 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z',
+  star: 'M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
+  starO: 'm22 9.24-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z',
+  link: 'M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z'
+};
+const svgI = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+const alvo = () => cur().sel || cur().id;
+const iniciais = (e) => nomeDe(e).split(' ').filter(Boolean).map((x) => x[0]).slice(0, 2).join('');
+function agoraSP() {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
+  return `${p.year}-${p.month}-${p.day}T${p.hour === '24' ? '00' : p.hour}:${p.minute}:${p.second}`;
+}
+function favoritosDe(x) { return String((x && x.Favoritos) || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean); }
+function anotacaoDe(id, k) {
+  const pend = S.outbox.filter((o) => o.kind === 'anot' && o.payload.ID_Produto === id && +o.payload.Foto === k + 1).pop();
+  if (pend) return pend.payload.json ? { key: id + '_' + (k + 1), json: pend.payload.json } : null;
+  const a = S.anotacoes.find((r) => r.ID_Produto === id && +r.Foto === k + 1);
+  return a ? { key: a.ID_Anotacao, url: a.Tracos } : null;
+}
+function paginasTodas() {
+  const fora = new Set(S.outbox.filter((o) => o.kind === 'dpag').map((o) => o.ref));
+  const out = S.paginas.filter((g) => !fora.has(g.ID_Pagina)).map((g) => Object.assign({}, g));
+  S.outbox.filter((o) => o.kind === 'pag').forEach((o) => {
+    const m = { ID_Pagina: o.ref, Titulo: o.payload.Titulo, ID_Fornecedor: o.payload.ID_Fornecedor, ID_Produto: o.payload.ID_Produto, thumb: o.payload.thumb, Criada_Em: o.payload.Criada_Em, _pend: true };
+    const i = out.findIndex((g) => g.ID_Pagina === o.ref);
+    if (i >= 0) Object.assign(out[i], m); else out.push(Object.assign({ Registrado_Por: S.email }, m));
+  });
+  return out.sort((a, b) => String(b.Criada_Em || b.Data_Hora).localeCompare(String(a.Criada_Em || a.Data_Hora)));
+}
+const tituloPag = (g) => g.Titulo || (forn(g.ID_Fornecedor) || {}).Empresa || 'Página sem título';
+
+function lado() {
+  const base = st.stack[0]; const ativo = base.v === 'time' ? 'time:' + base.time : base.v;
+  const cont = contaPorProjeto(); const n = S.outbox.length;
+  const it = (key, ic, label, extra, attrs) => `<button type="button" class="nv ${ativo === key ? 'on' : ''}" ${attrs} aria-label="${esc(label)}">${svgI(ic)}<span class="lbl">${esc(label)}</span>${extra != null ? `<span class="c">${esc(extra)}</span>` : ''}</button>`;
+  const times = timesOrdenados().map((t) => { const ps = S.projetos.filter((p) => p.Time === t); const f = ps.filter((p) => cont[p.ID_Projeto]).length;
+    return it('time:' + t, PATH[t] || PATH.Decor, t, `${f} de ${ps.length}`, `data-ltime="${esc(t)}"`); }).join('');
+  return `<aside class="side">${it('home', PATH.home, 'Início', null, 'data-tab="home"')}<div class="sb">Times</div>${times}<div class="sb">Na feira</div>
+   ${it('produtos', PATH.produtos, 'Produtos', todosProdutos().length, 'data-tab="produtos"')}${it('forn', PATH.forn, 'Fornecedores', todosFornecedores().length, 'data-tab="forn"')}${it('caderno', PATH.caderno, 'Caderno', paginasTodas().length + ' pág.', 'data-tab="caderno"')}
+   <div style="flex:1"></div><div class="eu"><div class="av">${esc(iniciais(S.email))}</div><div class="lbl"><b>${esc(nomeDe(S.email))}</b><small>${n ? n + ' na fila para enviar' : (navigator.onLine ? 'Tudo enviado' : 'Sem internet')}</small></div></div></aside>`;
+}
+
+function baseLarga() { return [...st.stack].reverse().find((x) => x.v !== 'form' && x.v !== 'novoforn') || st.stack[0]; }
+function guardaRolagem() { if (!LARGO()) return; const v = baseLarga(); v.sc = v.sc || {}; ['pl', 'pd', 'pu'].forEach((id) => { const e = $(id); if (e) v.sc[id] = e.scrollTop; }); }
+function selec(id) { guardaRolagem(); const v = cur(); v.sel = id; v.foto = 0; v.semAnot = false; v.sc = v.sc || {}; v.sc.pd = 0; render(); }
+
+function renderLargo() {
+  salvaPaginaJa();
+  guardaRolagem();
+  $('app').classList.add('largo'); $('nav').classList.add('hidden');
+  const top = cur(); const v = baseLarga(); let painel = '';
+  if (top.v === 'form' || top.v === 'novoforn') {
+    const tt = top.v === 'form' ? (st.form.edit ? 'Editar produto' : (st.form.fixed && proj(st.form.proj) ? 'Novo produto · ' + proj(st.form.proj).Projeto : 'Produto livre')) : (st.ns.edit ? 'Editar fornecedor' : 'Novo fornecedor');
+    painel = `<div class="veu"></div><aside class="painel"><div class="phd">${esc(tt)}</div>${top.v === 'form' ? vForm() : vNovoForn()}</aside>`;
+  }
+  let t = 'Canton Fair 2026', h = '';
+  const vazio = (txt) => `<div class="vazio">${txt}</div>`;
+  const dois = (lista, det, txt) => `<div class="pane lista" id="pl">${lista}</div><div class="pane det" id="pd">${det || vazio(txt)}</div>`;
+  if (v.v === 'home') h = `<div class="pane uno" id="pu">${vHome()}</div>`;
+  else if (v.v === 'time') { t = v.time; h = dois(vTime(v.time), v.sel && proj(v.sel) ? vProjeto(v.sel) : '', 'Escolha um projeto da lista para ver a referência e os achados.'); }
+  else if (v.v === 'projeto') { const p = proj(v.id); t = p ? p.Projeto : 'Projeto'; h = `<div class="pane uno" id="pu">${vProjeto(v.id)}</div>`; }
+  else if (v.v === 'produtos') { t = 'Produtos'; h = dois(vProdutos(), v.sel ? vProdutoLargo(v.sel, false) : '', 'Escolha um produto da lista.'); }
+  else if (v.v === 'produto') { const x = todosProdutos().find((p) => p.ID_Produto === v.id); const p = x && proj(x.ID_Projeto); t = (p ? p.Projeto : 'Achado livre') + (x && forn(x.ID_Fornecedor) ? ' · ' + forn(x.ID_Fornecedor).Empresa : ''); h = `<div class="pane uno" id="pu">${vProdutoLargo(v.id, true)}</div>`; }
+  else if (v.v === 'forn') { t = 'Fornecedores'; h = dois(vFornecedores(), v.sel ? vFornecedor(v.sel) : '', 'Escolha um fornecedor.'); }
+  else if (v.v === 'fornecedor') { const f = forn(v.id); t = f ? f.Empresa : 'Fornecedor'; h = `<div class="pane uno" id="pu">${vFornecedor(v.id)}</div>`; }
+  else if (v.v === 'comparar') { const p = proj(v.id); t = 'Comparar · ' + (p ? p.Projeto : ''); h = `<div class="pane uno" id="pu">${vComparar(v.id)}</div>`; }
+  else if (v.v === 'caderno') { t = 'Caderno'; h = vCaderno(v.sel); }
+  const podeVoltar = st.stack.indexOf(v) > 0;
+  render.lastBar = [t, podeVoltar]; bar(t, podeVoltar);
+  // o editor do caderno não é recriado (a Pencil pode estar no meio de um traço)
+  const ed = st.cad && st.cad.el && v.v === 'caderno' && st.cad.id === v.sel ? st.cad.el : null;
+  if (ed) ed.remove();
+  $('scr').innerHTML = `<div class="lg">${lado()}<div class="lgm">${h}</div></div>${painel}`;
+  $('scr').scrollTop = 0;
+  const sc = v.sc || {}; ['pl', 'pd', 'pu'].forEach((id) => { const e = $(id); if (e && sc[id]) e.scrollTop = sc[id]; });
+  if (v.sel) document.querySelectorAll(`#pl [data-proj="${CSS.escape(v.sel)}"], #pl [data-prod="${CSS.escape(v.sel)}"], #pl [data-forn="${CSS.escape(v.sel)}"], #pl [data-pag="${CSS.escape(v.sel)}"]`).forEach((e) => e.classList.add('sel'));
+  if (v.v === 'caderno') montaCaderno(v.sel, ed);
+  else if (st.cad) st.cad = null;
+  montaAnotacaoTela();
+  wire();
+}
+
+/* ---------- produto (iPad) ---------- */
+function vProdutoLargo(id, lado) {
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x) return '<div class="vazio">Produto não encontrado. Ele pode ter sido apagado.</div>';
+  const p = proj(x.ID_Projeto); const f = forn(x.ID_Fornecedor); const v = baseLarga();
+  if (!x._pend && !TENTOU.has(id)) { TENTOU.add(id); setTimeout(() => garanteFotos(id, urlsProduto(x), String(x.Registrado_Por || '').toLowerCase() !== S.email)); }
+  const slots = slotsProduto(x); const i = Math.min(v.foto || 0, Math.max(0, slots.length - 1)); const s = slots[i];
+  galAtual = slots.map((z) => z.full || z.th || '');
+  const an = s ? anotacaoDe(id, s.k) : null; const mostra = an && !v.semAnot;
+  const ps = p ? prodsDoProjeto(p.ID_Projeto) : []; const fob = num(x.FOB_USD);
+  const ord = ps.filter((y) => num(y.FOB_USD) != null).sort((a, b) => num(a.FOB_USD) - num(b.FOB_USD)); const pos = ord.findIndex((y) => y.ID_Produto === id);
+  const comp = ps.length > 1 && pos >= 0 ? (pos === 0 ? `<b style="color:#A5D6A7">Melhor FOB de ${ps.length}</b>` : `<b>${pos + 1}º menor FOB de ${ps.length}</b>`) : '<b>Único achado</b>';
+  const favs = favoritosDe(x); const meu = favs.includes(S.email);
+  const pags = paginasTodas().filter((g) => g.ID_Produto === id);
+  const fld = (l, val, data) => `<div class="field" ${data || ''}><div class="l">${l}</div><div class="v ${val ? '' : 'muted'}">${val || 'Não informado'}</div></div>`;
+  const foto = s ? `<button class="gimg big" data-zoom="${i}"><img id="fotoG" src="${s.full || s.th}" alt="">${mostra ? '<div class="anotov" id="anotov" data-key="' + esc(an.key) + '"></div>' : ''}${!s.full && s.url ? `<span class="gload">${navigator.onLine ? 'Carregando a foto em alta…' : 'Sem internet: mostrando a miniatura'}</span>` : ''}</button>
+     <button type="button" class="pill anotar" data-go="anotar">${I.edit}${an ? 'Editar anotação' : 'Anotar foto'}</button>${an ? `<button type="button" class="pill ocultar" data-go="toganot">${mostra ? 'Ocultar anotações' : 'Mostrar anotações'}</button>` : ''}`
+    : `<div class="gimg big gph">${I.img}<span>Sem foto</span></div>`;
+  return `<div class="pdl ${lado ? 'lado' : ''}"><div class="pdf"><div class="pdfoto">${foto}</div>
+    ${slots.length > 1 ? `<div class="strip">${slots.map((z, j) => `<button type="button" data-foto="${j}" class="${j === i ? 'on' : ''}" aria-label="Foto ${j + 1}"><img src="${z.full || z.th || ''}" alt=""></button>`).join('')}<span>Foto ${i + 1} de ${slots.length} · toque para ampliar</span></div>` : ''}</div>
+   <div class="pdi">
+    <div class="hero"><div class="k">${esc([x.Time, x.Subcategoria].filter(Boolean).join(' · '))}</div><div class="v">${esc(p ? p.Projeto : 'Achado livre')}</div>
+     <button type="button" class="favb ${meu ? 'on' : ''}" data-fav="${esc(id)}" aria-label="${meu ? 'Tirar dos favoritos' : 'Marcar como favorito'}">${svgI(meu ? PATH.star : PATH.starO)}</button>
+     <div class="g"><div><small>FOB</small><b class="num">${usd(fob)}</b></div><div><small>MOQ</small><b class="num">${x.MOQ !== '' && x.MOQ != null ? esc(x.MOQ) + ' pcs' : '<span class="todo">Não informado</span>'}</b></div>
+     <div><small>Interesse</small><b>${esc(x.Interesse || 'Não informado')}</b></div><div><small>Comparado aos outros achados</small>${comp}</div></div></div>
+    ${fld('Fornecedor', f ? esc(f.Empresa) + (f.Estande ? ' · Estande ' + esc(f.Estande) : '') : '', f ? `data-forn="${esc(f.ID_Fornecedor)}" role="button"` : '')}
+    ${fld('Anotações', esc(x.Anotacoes))}
+    ${favs.length ? fld('Favorito de', esc(favs.map(nomeDe).join(', '))) : ''}
+    <div class="field"><div class="l">Caderno</div>${pags.map((g) => `<button type="button" class="pgmini" data-pag="${esc(g.ID_Pagina)}">${g.thumb ? `<img src="${g.thumb}" alt="">` : '<span class="folhinha"></span>'}<span><b>${esc(tituloPag(g))}</b><small>${esc(nomeDe(g.Registrado_Por))}${g.Criada_Em ? ' · ' + esc(quando(g.Criada_Em)) : ''}</small></span></button>`).join('')}
+     <button type="button" class="lnk" data-go="novapagprod">+ Abrir uma página do caderno para este produto</button></div>
+    ${fld('Registrado por', x._pend ? 'Você · aguardando envio' : esc(nomeDe(x.Registrado_Por)) + (x.Data_Hora ? ' · ' + esc(quando(x.Data_Hora)) : ''))}
+    ${acoes('prod', x)}
+    ${p ? `<button class="addp out" data-proj="${esc(p.ID_Projeto)}">Ver projeto na buylist</button>` : ''}<div style="height:20px"></div>
+   </div></div>`;
+}
+// desenho por cima da foto (só leitura), alinhado à área real da imagem
+async function montaAnotacaoTela() {
+  const box = $('anotov'); const im = $('fotoG'); if (!box || !im) return;
+  const key = box.dataset.key; const v = baseLarga(); const id = v.v === 'produto' ? v.id : v.sel;
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x) return;
+  const s = slotsProduto(x)[Math.min(v.foto || 0, 99)]; const an = s && anotacaoDe(id, s.k); if (!an) return;
+  const texto = an.json || await pegaJson('anot:' + an.key, an.url); const d = texto && Lousa.ler(texto);
+  if (!d || !document.body.contains(box)) return;
+  const posiciona = () => {
+    const W = im.clientWidth, H = im.clientHeight; if (!W || !im.naturalWidth) return;
+    const r = Math.min(W / im.naturalWidth, H / im.naturalHeight); const w = im.naturalWidth * r, h = im.naturalHeight * r;
+    Object.assign(box.style, { left: (W - w) / 2 + 'px', top: (H - h) / 2 + 'px', width: w + 'px', height: h + 'px' });
+  };
+  if (im.complete) posiciona(); else im.addEventListener('load', posiciona, { once: true });
+  new ResizeObserver(posiciona).observe(im);
+  box.innerHTML = ''; Lousa.cria(box, { w: d.w, h: d.h, dados: d, editavel: false });
+}
+async function compoe(src, d) {
+  const im = await loadImg(src); const W = Math.min(2000, im.naturalWidth); const H = Math.round(im.naturalHeight * W / im.naturalWidth);
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d'); x.drawImage(im, 0, 0, W, H);
+  Lousa.pinta(x, d, W / d.w, {}); return c.toDataURL('image/jpeg', 0.88);
+}
+
+/* ---------- anotar a foto com a Pencil ---------- */
+let anotEl = null;
+async function abreAnotar() {
+  const v = baseLarga(); const id = v.v === 'produto' ? v.id : v.sel; if (ocupado(id)) return;
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x) return;
+  const s = slotsProduto(x)[Math.min(v.foto || 0, 99)]; if (!s) return;
+  if (!s.full) return toast(navigator.onLine ? 'Aguarde a foto em alta carregar e toque de novo.' : 'Sem internet: a foto em alta ainda não está no iPad. Abra o produto com internet uma vez.');
+  const an = anotacaoDe(id, s.k); let d = null;
+  if (an) { const t = an.json || await pegaJson('anot:' + an.key, an.url); d = t && Lousa.ler(t); if (!d) return toast('Não consegui abrir a anotação. Tente com internet.'); }
+  const im = await loadImg(s.full); const W = 1000, H = Math.round(1000 * im.naturalHeight / im.naturalWidth);
+  const cores = ['#E53935', '#262422', '#1E5BD8', '#FFFFFF']; const larg = [2.5, 5, 9];
+  anotEl = document.createElement('div'); anotEl.className = 'anot';
+  anotEl.innerHTML = `<header><button type="button" class="txt" data-a="cancelar">Cancelar</button><div class="ferr">
+    <button type="button" class="tl on" data-t="pen" aria-label="Caneta">${I.edit}</button><button type="button" class="tl" data-t="hl" aria-label="Marca-texto">${svgI(PATH.hl)}</button><button type="button" class="tl" data-t="er" aria-label="Borracha">${svgI(PATH.er)}</button><i></i>
+    ${cores.map((c, j) => `<button type="button" class="cl ${j ? '' : 'on'}" data-c="${c}" style="background:${c}" aria-label="Cor ${j + 1}"></button>`).join('')}<i></i>
+    ${larg.map((w, j) => `<button type="button" class="tl ${j === 1 ? 'on' : ''}" data-w="${w}" aria-label="Espessura ${j + 1}"><span style="width:${6 + j * 6}px;height:${6 + j * 6}px"></span></button>`).join('')}<i></i>
+    <button type="button" class="tl" data-a="undo" aria-label="Desfazer">${svgI(PATH.undo)}</button><button type="button" class="tl" data-a="redo" aria-label="Refazer">${svgI(PATH.redo)}</button></div>
+    <button type="button" class="ok" data-a="ok">Concluir</button></header>
+   <div class="palco"><div class="quadro"><img alt="" src="${s.full}"><div class="tela"></div></div></div>
+   <footer>${Lousa.temPen() ? 'Só a Pencil desenha. Com dois dedos você amplia e move a foto.' : 'Desenhe com a Pencil ou com o dedo. Quando a Pencil for usada, o dedo passa a só ampliar e mover a foto.'}</footer>`;
+  document.body.appendChild(anotEl);
+  const palco = anotEl.querySelector('.palco'), quadro = anotEl.querySelector('.quadro');
+  const enc = () => { const mw = palco.clientWidth - 40, mh = palco.clientHeight - 40; const r = Math.min(mw / W, mh / H); quadro.style.width = W * r + 'px'; quadro.style.height = H * r + 'px'; L && L.ajusta(); };
+  let L = null; enc();
+  L = Lousa.cria(anotEl.querySelector('.tela'), { w: W, h: H, dados: d, editavel: true, ferramenta: { t: 'pen', c: cores[0], w: larg[1] }, aoPen: () => { anotEl.querySelector('footer').textContent = 'Só a Pencil desenha. Com dois dedos você amplia e move a foto.'; } });
+  window.addEventListener('resize', enc);
+  // dois dedos ampliam e movem (quando a Pencil está em uso)
+  let z = 1, tx = 0, ty = 0, g = null;
+  const aplica = () => { quadro.style.transform = `translate(${tx}px,${ty}px) scale(${z})`; };
+  const dist = (a) => Math.hypot(a[0].clientX - a[1].clientX, a[0].clientY - a[1].clientY);
+  const meio = (a) => [(a[0].clientX + a[1].clientX) / 2, (a[0].clientY + a[1].clientY) / 2];
+  const dedos = (e) => [...e.touches].filter((t) => t.touchType !== 'stylus');
+  palco.addEventListener('touchstart', (e) => { const f = dedos(e); if (!Lousa.temPen() || f.length !== 2) return; e.preventDefault(); g = { d: dist(f), m: meio(f), z, tx, ty }; }, { passive: false });
+  palco.addEventListener('touchmove', (e) => { const f = dedos(e); if (!g || f.length !== 2) return; e.preventDefault(); const m = meio(f); z = Math.min(4, Math.max(1, g.z * dist(f) / g.d)); tx = g.tx + m[0] - g.m[0]; ty = g.ty + m[1] - g.m[1]; if (z === 1) { tx = 0; ty = 0; } aplica(); }, { passive: false });
+  palco.addEventListener('touchend', () => { g = null; });
+  const fecha = () => { window.removeEventListener('resize', enc); anotEl.remove(); anotEl = null; render(); };
+  anotEl.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.t) { L.ferramenta.t = b.dataset.t; anotEl.querySelectorAll('[data-t]').forEach((y) => y.classList.toggle('on', y === b)); }
+    else if (b.dataset.c) { L.ferramenta.c = b.dataset.c; if (L.ferramenta.t === 'er') { L.ferramenta.t = 'pen'; anotEl.querySelectorAll('[data-t]').forEach((y) => y.classList.toggle('on', y.dataset.t === 'pen')); } anotEl.querySelectorAll('[data-c]').forEach((y) => y.classList.toggle('on', y === b)); }
+    else if (b.dataset.w) { L.ferramenta.w = +b.dataset.w; anotEl.querySelectorAll('[data-w]').forEach((y) => y.classList.toggle('on', y === b)); }
+    else if (b.dataset.a === 'undo') L.desfazer();
+    else if (b.dataset.a === 'redo') L.refazer();
+    else if (b.dataset.a === 'cancelar') { if (!L.mudou || await confirmar('Sair sem salvar?', 'O que você desenhou agora será descartado.', 'Descartar')) fecha(); }
+    else if (b.dataset.a === 'ok') {
+      if (!L.mudou) return fecha();
+      const json = L.vazio() ? '' : L.json(); const key = id + '_' + (s.k + 1);
+      const imagem = json ? await compoe(s.full, L.dados) : '';
+      S.outbox = S.outbox.filter((o) => !(o.kind === 'anot' && o.payload.ID_Produto === id && +o.payload.Foto === s.k + 1 && emEnvio !== id));
+      S.outbox.push({ kind: 'anot', id: uid('OP'), ref: id, payload: { ID_Produto: id, Foto: s.k + 1, json, imagem } });
+      if (json) await guardaJson('anot:' + key, '', json); else await apagaJson('anot:' + key);
+      await saveOutbox(); fecha();
+      toast(json ? (navigator.onLine ? 'Anotação salva. Enviando…' : 'Anotação salva no iPad. Envia quando voltar a internet.') : 'Anotação apagada.'); sync();
+    }
+  });
+}
+
+/* ---------- favoritos ---------- */
+async function alternaFav(id) {
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x || ocupado(id)) return;
+  const favs = favoritosDe(x); const on = !favs.includes(S.email);
+  const novo = (on ? favs.concat(S.email) : favs.filter((e) => e !== S.email)).join(', ');
+  const pend = S.outbox.find((o) => o.kind === 'prod' && o.id === id);
+  if (pend) pend.payload.Favoritos = novo; else { const y = S.produtos.find((p) => p.ID_Produto === id); if (y) y.Favoritos = novo; }
+  S.outbox = S.outbox.filter((o) => !(o.kind === 'fav' && o.ref === id));
+  S.outbox.push({ kind: 'fav', id: uid('OP'), ref: id, payload: { on } });
+  await Promise.all([saveOutbox(), saveCore()]); render(); sync();
+}
+
+/* ---------- comparar achados ---------- */
+function vComparar(pid) {
+  const p = proj(pid); if (!p) return '<div class="vazio">Projeto não encontrado.</div>';
+  const im = projImg(p); const ps = prodsDoProjeto(pid).slice().sort((a, b) => (num(a.FOB_USD) ?? 9e9) - (num(b.FOB_USD) ?? 9e9));
+  const pags = paginasTodas();
+  const ref = `<div class="cd ref">${im ? `<img class="cimg" src="${im}" alt="Referência da buylist">` : `<div class="cimg gph">${I.img}</div>`}<div class="bd">
+    <div class="k2">REFERÊNCIA BUYLIST</div><div class="v2">${esc(p.Projeto)}</div>
+    <div><small>FOB alvo</small>${p.FOB_Alvo ? `<b>${esc(p.FOB_Alvo)}</b>` : '<i>A preencher</i>'}</div><div><small>MOQ alvo</small>${p.MOQ_Alvo !== '' && p.MOQ_Alvo != null ? `<b>${esc(p.MOQ_Alvo)}</b>` : '<i>A preencher</i>'}</div>
+    <div><small>CMV 12M</small><b>${num(p.CMV_12M) ? brl(num(p.CMV_12M)) : 'Sem dado'}</b></div><div><small>SKUs</small><b>${p.SKUs !== '' && p.SKUs != null ? esc(p.SKUs) : 'Sem dado'}</b></div></div></div>`;
+  const cards = ps.map((x, i) => { const f = forn(x.ID_Fornecedor); const favs = favoritosDe(x); const meu = favs.includes(S.email); const n = pags.filter((g) => g.ID_Produto === x.ID_Produto).length;
+    const c = FOTOS[x.ID_Produto]; const src = (x._pend && x.fotos && x.fotos[0]) || (c && c.f && c.f.find(Boolean)) || x.thumb;
+    return `<div class="cd ${meu ? 'meu' : ''}"><div class="cph">${src ? `<img class="cimg" src="${src}" alt="">` : `<div class="cimg gph">${I.img}</div>`}${i === 0 && ps.length > 1 && num(x.FOB_USD) != null ? '<span class="tag">Melhor FOB</span>' : ''}
+      <button type="button" class="favb ${meu ? 'on' : ''}" data-fav="${esc(x.ID_Produto)}" aria-label="${meu ? 'Tirar dos favoritos' : 'Marcar como favorito'}">${svgI(meu ? PATH.star : PATH.starO)}</button></div>
+     <button type="button" class="bd" data-prod="${esc(x.ID_Produto)}"><div class="v2">${esc(f ? f.Empresa : 'Fornecedor')}</div>
+      <div class="dup"><div><small>FOB</small><b class="${i === 0 && ps.length > 1 ? 'bom' : ''}">${usd(num(x.FOB_USD)) || '·'}</b></div><div><small>MOQ</small><b>${x.MOQ !== '' && x.MOQ != null ? esc(x.MOQ) : '·'}</b></div></div>
+      <div><small>Interesse</small><b>${esc(x.Interesse || 'Não informado')}</b></div>
+      ${x.Anotacoes ? `<p>${esc(x.Anotacoes)}</p>` : ''}
+      <small>${n ? n + ' página' + (n > 1 ? 's' : '') + ' no caderno' : 'Sem página no caderno'}</small>
+      ${favs.length ? `<small class="fv">Favorito de ${esc(favs.map(nomeDe).join(', '))}</small>` : ''}</button></div>`; }).join('');
+  return `<div class="cmp">${ref}${cards || '<div class="vazio">Nenhum produto achado ainda.</div>'}</div>`;
+}
+
+/* ---------- caderno do estande ---------- */
+function vCaderno(sel) {
+  const gs = paginasTodas(); const grupos = {};
+  gs.forEach((g) => { const d = String(g.Criada_Em || g.Data_Hora || '').slice(0, 10); (grupos[d] = grupos[d] || []).push(g); });
+  const dia = (d) => { const m = d.match(/(\d{4})-(\d\d)-(\d\d)/); if (!m) return 'Sem data'; const dt = new Date(+m[1], m[2] - 1, +m[3]); return dt.toLocaleDateString('pt-BR', { weekday: 'long' }).replace('-feira', '') + ', ' + m[3] + '/' + m[2]; };
+  const lista = `<button type="button" class="addp" data-go="novapag">Nova página</button>${Object.keys(grupos).sort().reverse().map((d) => `<div class="ghead">${esc(dia(d))}<span>${grupos[d].length}</span></div>${grupos[d].map((g) => { const f = forn(g.ID_Fornecedor); const x = g.ID_Produto && todosProdutos().find((p) => p.ID_Produto === g.ID_Produto); const pp = x && proj(x.ID_Projeto);
+    return `<button type="button" class="row pgrow" data-pag="${esc(g.ID_Pagina)}">${g.thumb ? `<img class="th pg" src="${g.thumb}" alt="">` : '<span class="th pg folhinha"></span>'}<div class="t"><div class="t1">${esc(tituloPag(g))}</div><div class="t2">${esc(f ? (f.Estande ? 'Estande ' + f.Estande : f.Empresa) : 'Sem fornecedor')}</div><div class="t2">${pp ? 'Ligada a ' + esc(pp.Projeto) : x ? 'Ligada a um achado livre' : 'Só no caderno'}${g._pend ? ' · na fila' : ''}</div></div></button>`; }).join('')}`).join('') || '<div class="empty">Nenhuma página ainda. Toque em Nova página para escrever e desenhar com a Pencil.</div>'}`;
+  const g = sel && gs.find((y) => y.ID_Pagina === sel);
+  let det = '<div class="vazio">Escolha uma página ou crie uma nova.</div>';
+  if (g) {
+    const f = forn(g.ID_Fornecedor); const cores = ['#1E3A8A', '#262422', '#E53935', '#2E7D32']; const fe = (st.cad && st.cad.fer) || { t: 'pen', c: cores[0], w: 3 };
+    det = `<div class="cbar">
+      ${[['pen', I.edit, 'Caneta'], ['hl', svgI(PATH.hl), 'Marca-texto'], ['er', svgI(PATH.er), 'Borracha'], ['move', svgI(PATH.move), 'Mover e redimensionar fotos']].map(([t, ic, l]) => `<button type="button" class="tb ${fe.t === t ? 'on' : ''}" data-cad="t:${t}" aria-label="${l}">${ic}</button>`).join('')}<i></i>
+      ${cores.map((c) => `<button type="button" class="dot ${fe.c === c ? 'on' : ''}" data-cad="c:${c}" style="background:${c}" aria-label="Cor"></button>`).join('')}<i></i>
+      ${[2, 3, 6].map((w, j) => `<button type="button" class="tb ${fe.w === w ? 'on' : ''}" data-cad="w:${w}" aria-label="Espessura ${j + 1}"><span class="esp" style="width:${5 + j * 5}px;height:${5 + j * 5}px"></span></button>`).join('')}<i></i>
+      <label class="tb" aria-label="Colar foto da câmera">${I.cam}<input type="file" accept="image/*" capture="environment" id="cadFoto" hidden></label>
+      <button type="button" class="tb" data-cad="undo" aria-label="Desfazer">${svgI(PATH.undo)}</button><button type="button" class="tb" data-cad="redo" aria-label="Refazer">${svgI(PATH.redo)}</button>
+</div>
+     <div class="folhawrap" id="pd"><div class="fmeta"><button type="button" class="ligar" data-go="ligarpag">${svgI(PATH.link)}Título e ligação</button>
+      ${podeApagar(Object.assign({}, g, { _pend: g._pend && !S.paginas.some((y) => y.ID_Pagina === g.ID_Pagina) })) ? `<button type="button" class="ligar cinza" data-go="delpag">${I.del}Apagar página</button>` : ''}</div><div class="folha"><div class="fcab"><span>${esc(tituloPag(g))}${f && f.Estande ? ' · Estande ' + esc(f.Estande) : ''}</span><span>${esc(nomeDe(g.Registrado_Por))}${g.Criada_Em ? ' · ' + esc(quando(g.Criada_Em)) : ''}</span></div><div id="cadEd"></div></div></div>`;
+  }
+  return `<div class="pane lista estreita" id="pl">${lista}</div><div class="pane det cad">${det}</div>`;
+}
+let salvaT = null;
+async function montaCaderno(sel, existente) {
+  const holder = $('cadEd'); if (!holder) return;
+  if (existente) { holder.replaceWith(existente); return; }
+  const g = paginasTodas().find((y) => y.ID_Pagina === sel); if (!g) return;
+  holder.innerHTML = '<div class="vazio">Abrindo a página…</div>';
+  const pend = S.outbox.filter((o) => o.kind === 'pag' && o.ref === sel).pop();
+  const texto = (pend && pend.payload.json) || await pegaJson('pag:' + sel, g.Tracos);
+  if (!document.body.contains(holder) || baseLarga().sel !== sel) return;
+  if (texto == null && g.Tracos) { holder.innerHTML = `<div class="vazio">${navigator.onLine ? 'Não consegui abrir a página. Toque em sincronizar e tente de novo.' : 'Esta página abre quando houver internet.'}</div>`; return; }
+  const d = texto ? Lousa.ler(texto) : null;
+  holder.innerHTML = '';
+  const el = document.createElement('div'); el.className = 'ed'; holder.appendChild(el);
+  const fer = (st.cad && st.cad.fer) || { t: 'pen', c: '#1E3A8A', w: 3 };
+  const L = Lousa.cria(el, { w: 1000, h: 1414, dados: d, editavel: true, ferramenta: Object.assign({}, fer), aoMudar: () => { clearTimeout(salvaT); salvaT = setTimeout(() => salvaPagina(sel), 2000); } });
+  st.cad = { id: sel, L, el: holder, fer: L.ferramenta };
+}
+function salvaPaginaJa() { if (salvaT && st.cad) { clearTimeout(salvaT); salvaT = null; salvaPagina(st.cad.id); } }
+async function salvaPagina(id, meta) {
+  salvaT = null;
+  const g = paginasTodas().find((y) => y.ID_Pagina === id); if (!g) return;
+  const L = st.cad && st.cad.id === id ? st.cad.L : null;
+  const pend = S.outbox.filter((o) => o.kind === 'pag' && o.ref === id && emEnvio !== id).pop();
+  let json = L ? L.json() : (pend && pend.payload.json) || ((await jsonLocal('pag:' + id)) || {}).t || '';
+  let imagem = '', thumb = g.thumb || '';
+  if (L) { imagem = Lousa.exporta(L.dados, 900, { pontos: true }, 0.82); thumb = Lousa.exporta(L.dados, 160, { pontos: true }, 0.7); L.mudou = false; }
+  else if (!json && !pend) json = '';
+  const payload = Object.assign({ ID_Pagina: id, Titulo: g.Titulo || '', ID_Fornecedor: g.ID_Fornecedor || '', ID_Produto: g.ID_Produto || '', Criada_Em: g.Criada_Em || agoraSP() }, meta || {});
+  if (json) payload.json = json; if (imagem) payload.imagem = imagem; if (thumb) payload.thumb = thumb;
+  if (pend) { if (!payload.imagem && pend.payload.imagem) payload.imagem = pend.payload.imagem; pend.payload = payload; }
+  else S.outbox.push({ kind: 'pag', id: uid('OP'), ref: id, payload });
+  if (json) await guardaJson('pag:' + id, '', json);
+  await saveOutbox(); refreshBar();
+  const lbl = document.querySelector(`#pl [data-pag="${CSS.escape(id)}"] img`); if (lbl && thumb) lbl.src = thumb;
+  clearTimeout(salvaPagina.t); salvaPagina.t = setTimeout(() => sync(), 4000);
+}
+function novaPagina(meta) {
+  const id = uid('PG'); const payload = Object.assign({ ID_Pagina: id, Titulo: '', ID_Fornecedor: '', ID_Produto: '', Criada_Em: agoraSP() }, meta || {});
+  S.outbox.push({ kind: 'pag', id: uid('OP'), ref: id, payload }); saveOutbox();
+  st.cad = null; st.stack = [{ v: 'caderno', sel: id }]; render();
+}
+async function apagarPagina(id) {
+  const g = paginasTodas().find((y) => y.ID_Pagina === id); if (!g || ocupado(id)) return;
+  const noServidor = S.paginas.some((y) => y.ID_Pagina === id);
+  if (noServidor && !podeApagar(g)) return toast('Só quem criou a página pode apagar.');
+  if (!(await confirmar('Apagar página?', 'A página sai do caderno de todos. Não dá para desfazer.', 'Apagar'))) return;
+  clearTimeout(salvaT); salvaT = null; st.cad = null;
+  S.outbox = S.outbox.filter((o) => o.ref !== id);
+  if (noServidor) { S.paginas = S.paginas.filter((y) => y.ID_Pagina !== id); S.outbox.push({ kind: 'dpag', id: uid('OP'), ref: id }); await saveCore(); }
+  await saveOutbox(); apagaJson('pag:' + id);
+  cur().sel = null; render(); toast('Página apagada.'); sync();
+}
+function ligarPagina(id) {
+  const g = paginasTodas().find((y) => y.ID_Pagina === id); if (!g) return;
+  const el = document.createElement('div'); el.className = 'dd conf ligar';
+  let fo = g.ID_Fornecedor || '', pr = g.ID_Produto || '', q = '';
+  const desenha = () => {
+    const fs = todosFornecedores().filter((f) => String(f.Empresa).toLowerCase().includes(q.toLowerCase())).sort((a, b) => String(a.Empresa).localeCompare(String(b.Empresa)));
+    const ps = todosProdutos().filter((x) => !fo || x.ID_Fornecedor === fo);
+    el.querySelector('.fl').innerHTML = `<button type="button" class="op ${!fo ? 'on' : ''}" data-fo="">Nenhum fornecedor</button>` + fs.map((f) => `<button type="button" class="op ${fo === f.ID_Fornecedor ? 'on' : ''}" data-fo="${esc(f.ID_Fornecedor)}">${esc(f.Empresa)}${f.Estande ? `<small>Estande ${esc(f.Estande)}</small>` : ''}</button>`).join('');
+    el.querySelector('.pl').innerHTML = `<button type="button" class="op ${!pr ? 'on' : ''}" data-pr="">Nenhum produto</button>` + ps.map((x) => { const p = proj(x.ID_Projeto); return `<button type="button" class="op ${pr === x.ID_Produto ? 'on' : ''}" data-pr="${esc(x.ID_Produto)}">${esc(p ? p.Projeto : 'Achado livre · ' + (x.Subcategoria || ''))}<small>${usd(num(x.FOB_USD))}${forn(x.ID_Fornecedor) ? ' · ' + esc(forn(x.ID_Fornecedor).Empresa) : ''}</small></button>`; }).join('');
+  };
+  el.innerHTML = `<div class="box"><div class="h">Título e ligação da página</div>
+    <div class="lg2"><label class="lb2" for="lgT">Título</label><input id="lgT" value="${esc(g.Titulo || '')}" placeholder="${esc(tituloPag(Object.assign({}, g, { Titulo: '' })))}">
+    <div class="cols"><div><span class="lb2">Fornecedor</span><input id="lgQ" placeholder="Buscar fornecedor" autocomplete="off"><div class="fl"></div></div><div><span class="lb2">Produto</span><div class="pl"></div></div></div></div>
+    <div class="cb"><button type="button" data-r="0">Cancelar</button><button type="button" data-r="1">Salvar</button></div></div>`;
+  document.body.appendChild(el); desenha();
+  el.querySelector('#lgQ').oninput = (e) => { q = e.target.value; desenha(); };
+  el.onclick = (e) => {
+    const b = e.target.closest('button');
+    if (e.target === el || (b && b.dataset.r === '0')) { el.remove(); return; }
+    if (!b) return;
+    if (b.dataset.fo !== undefined) { fo = b.dataset.fo; const x = todosProdutos().find((y) => y.ID_Produto === pr); if (x && fo && x.ID_Fornecedor !== fo) pr = ''; desenha(); }
+    else if (b.dataset.pr !== undefined) { pr = b.dataset.pr; const x = todosProdutos().find((y) => y.ID_Produto === pr); if (x && x.ID_Fornecedor) fo = x.ID_Fornecedor; desenha(); }
+    else if (b.dataset.r === '1') { const Titulo = el.querySelector('#lgT').value.trim(); el.remove(); salvaPagina(id, { Titulo, ID_Fornecedor: fo, ID_Produto: pr }).then(() => render()); }
+  };
+}
+function cadAcao(a) {
+  const c = st.cad; if (!c || !c.L) return;
+  const [k, val] = a.split(':');
+  if (k === 't') { c.L.ferramenta.t = val; c.L.sel = -1; c.L.redesenha(); }
+  else if (k === 'c') { c.L.ferramenta.c = val; if (c.L.ferramenta.t === 'er' || c.L.ferramenta.t === 'move') c.L.ferramenta.t = 'pen'; }
+  else if (k === 'w') c.L.ferramenta.w = +val;
+  else if (k === 'undo') return c.L.desfazer();
+  else if (k === 'redo') return c.L.refazer();
+  const f = c.L.ferramenta;
+  document.querySelectorAll('[data-cad]').forEach((b) => { const [kk, vv] = b.dataset.cad.split(':'); if (kk === 't') b.classList.toggle('on', f.t === vv); if (kk === 'c') b.classList.toggle('on', f.c === vv); if (kk === 'w') b.classList.toggle('on', f.w === +vv); });
+}
+
 /* ================= render ================= */
 function render(scroll) {
+  if (LARGO()) return renderLargo();
+  $('app').classList.remove('largo'); st.cad = null;
   const v = cur(); const tabOf = { home: 'home', time: 'home', projeto: 'home', produtos: 'produtos', produto: 'produtos', forn: 'forn', fornecedor: 'forn' };
   let h = '', t = 'Canton Fair 2026', b = st.stack.length > 1;
   if (v.v === 'home') h = vHome();
@@ -351,6 +730,11 @@ function wire() {
     try { const full = await compress(file, 1400, 0.74); st.form.ph[k] = full; st.form.th[k] = await reduz(full, 320, 0.7); st.form.tem[k] = true; st.form.mud[k] = true; render($('scr').scrollTop); }
     catch (err) { toast('Não consegui ler a foto. Tente de novo.'); }
   });
+  const cf = $('cadFoto'); if (cf) cf.onchange = async (e) => {
+    const file = e.target.files[0]; if (!file || !st.cad) return;
+    try { const u = await compress(file, 1000, 0.72); const im = await loadImg(u); st.cad.L.colaImagem(u, im.naturalWidth, im.naturalHeight); cadAcao('t:move'); }
+    catch (err) { toast('Não consegui ler a foto. Tente de novo.'); }
+  };
   const card = $('nsCard'); if (card) card.onchange = async (e) => {
     const file = e.target.files[0]; if (!file) return; keep();
     try { st.ns.card = await compress(file, 1400, 0.74); st.ns.th = await reduz(st.ns.card, 360, 0.7); render($('scr').scrollTop); }
@@ -423,7 +807,8 @@ async function salvarEdicaoProduto() {
       const j = [0, 1, 2, 3].find((k) => f.th[k] || f.tem[k]);
       if (j == null || j !== f.j0 || f.mud[j]) { const nt = j == null ? '' : (f.th[j] || x.thumb || ''); payload.thumb = nt; x.thumb = nt; }
       const c = (await fotosLocais(id)) || { u: [], f: [] };
-      Object.keys(novas).forEach((k) => { c.f[k - 1] = novas[k]; c.u[k - 1] = ''; x['Foto_' + k] = novas[k] ? (x['Foto_' + k] || 'novo') : ''; });
+      Object.keys(novas).forEach((k) => { c.f[k - 1] = novas[k]; c.u[k - 1] = ''; x['Foto_' + k] = novas[k] ? (x['Foto_' + k] || 'novo') : '';
+        if (anotacaoDe(id, k - 1)) S.outbox.push({ kind: 'anot', id: uid('OP'), ref: id, payload: { ID_Produto: id, Foto: +k, json: '' } }); });
       await guardaFotos(id, c, false);
     }
     Object.assign(x, campos);
@@ -443,7 +828,8 @@ async function apagarProduto(id) {
   S.outbox = S.outbox.filter((o) => o.id !== id && o.ref !== id);
   if (!eraPend) { S.produtos = S.produtos.filter((p) => p.ID_Produto !== id); S.outbox.push({ kind: 'dprod', id: uid('OP'), ref: id }); await saveCore(); }
   await saveOutbox(); apagaFotos(id);
-  back(); toast('Produto apagado.'); sync();
+  if (cur().sel === id) { cur().sel = null; render(); } else back();
+  toast('Produto apagado.'); sync();
 }
 async function salvarFornecedor() {
   keep(); const n = st.ns;
@@ -489,7 +875,8 @@ async function apagarFornecedor(id) {
   if (!eraPend) { S.fornecedores = S.fornecedores.filter((x) => x.ID_Fornecedor !== id); S.outbox.push({ kind: 'dforn', id: uid('OP'), ref: id }); await saveCore(); }
   if (S.lastSup === id) { S.lastSup = null; kvSet('lastSup', null); }
   await saveOutbox(); apagaFotos(id);
-  back(); toast('Fornecedor apagado.'); sync();
+  if (cur().sel === id) { cur().sel = null; render(); } else back();
+  toast('Fornecedor apagado.'); sync();
 }
 
 /* ================= confirmação e foto ampliada ================= */
@@ -533,15 +920,31 @@ function abreLb(imgs, i) {
 }
 
 /* ================= sincronização ================= */
-const ACAO = { forn: 'salvarFornecedor', prod: 'salvarProduto', eprod: 'editarProduto', dprod: 'excluirProduto', eforn: 'editarFornecedor', dforn: 'excluirFornecedor' };
+const ACAO = { forn: 'salvarFornecedor', prod: 'salvarProduto', eprod: 'editarProduto', dprod: 'excluirProduto', eforn: 'editarFornecedor', dforn: 'excluirFornecedor',
+  pag: 'salvarPagina', dpag: 'excluirPagina', anot: 'salvarAnotacao', fav: 'favorito' };
 const ORDEM = { forn: 0, prod: 1 };
 function corpo(item) {
   if (item.kind === 'forn' || item.kind === 'eforn') return { f: item.payload };
   if (item.kind === 'prod' || item.kind === 'eprod') return { p: item.payload };
+  if (item.kind === 'pag') return { g: item.payload };
+  if (item.kind === 'anot') return { a: item.payload };
+  if (item.kind === 'fav') return { id: item.ref, on: item.payload.on };
   return { id: item.ref };
 }
 async function aplicaRetorno(item, r) {
   const k = item.kind;
+  if (k === 'pag' && r.linha) {
+    const i = S.paginas.findIndex((g) => g.ID_Pagina === item.ref); const o = Object.assign({}, r.linha, { thumb: item.payload.thumb || (i >= 0 ? S.paginas[i].thumb : '') });
+    if (i >= 0) S.paginas[i] = o; else S.paginas.push(o);
+    const c = await jsonLocal('pag:' + item.ref); if (c) await guardaJson('pag:' + item.ref, o.Tracos, c.t);
+    return;
+  }
+  if (k === 'anot') {
+    const id = item.payload.ID_Produto + '_' + item.payload.Foto; S.anotacoes = S.anotacoes.filter((a) => a.ID_Anotacao !== id);
+    if (r.linha) { S.anotacoes.push(r.linha); const c = await jsonLocal('anot:' + id); if (c) await guardaJson('anot:' + id, r.linha.Tracos, c.t); }
+    return;
+  }
+  if (k === 'fav') { const x = S.produtos.find((p) => p.ID_Produto === item.ref); if (x) x.Favoritos = r.favoritos; return; }
   if (k === 'forn' || k === 'prod') {
     const leve = Object.assign({}, item.payload); delete leve.fotos; delete leve.cartao; leve.Registrado_Por = S.email;
     if (k === 'forn') { S.fornecedores.push(leve); if (item.payload.cartao) await guardaFotos(item.id, { u: [''], f: [item.payload.cartao] }, false); }
@@ -574,7 +977,7 @@ async function sync(manual, completo) {
       } catch (e) {
         if (e instanceof LoginErr) throw e;
         if (!e.servidor) { erroRede = true; break; }
-        if (item.kind === 'forn' || item.kind === 'prod') item.erro = e.message; // segue com os próximos
+        if (item.kind === 'forn' || item.kind === 'prod' || item.kind === 'pag') item.erro = e.message; // segue com os próximos
         else { S.outbox = S.outbox.filter((o) => o !== item); await saveOutbox(); avisos.push(e.message); completo = true; mudou = true; }
       } finally { emEnvio = null; }
     }
@@ -593,6 +996,8 @@ async function sync(manual, completo) {
         if (ap.produtos.length) S.produtos = S.produtos.filter((x) => !ap.produtos.includes(x.ID_Produto));
         if (ap.fornecedores.length) S.fornecedores = S.fornecedores.filter((x) => !ap.fornecedores.includes(x.ID_Fornecedor));
       }
+      if (r.paginas) S.paginas = r.paginas;
+      if (r.anotacoes) S.anotacoes = r.anotacoes;
       S.agora = r.agora; await saveCore();
       if (!S.img || !S.img.app || !S.img.app.capa) { try { await baixaImagens(); mudou = true; } catch (e) {} }
     }
@@ -657,7 +1062,7 @@ async function inicia() {
     $('scr').innerHTML = '<div class="load"><b>Preparando o roteiro</b>Baixando os projetos e as fotos da buylist para funcionar sem internet. Só acontece na primeira vez.</div>';
     try {
       const r = await api('dados', { desde: '' });
-      S.projetos = r.projetos; S.times = r.times; S.produtos = r.produtos; S.fornecedores = r.fornecedores; S.agora = r.agora;
+      S.projetos = r.projetos; S.times = r.times; S.produtos = r.produtos; S.fornecedores = r.fornecedores; S.agora = r.agora; S.paginas = r.paginas || []; S.anotacoes = r.anotacoes || [];
       await Promise.all([kvSet('projetos', S.projetos), kvSet('times', S.times), saveCore()]);
       try { await baixaImagens(); } catch (e) {}
     } catch (e) {
@@ -676,36 +1081,58 @@ function toast(m) { document.querySelectorAll('.toast').forEach((t) => t.remove(
 
 document.addEventListener('click', (e) => {
   let el;
-  if ((el = e.target.closest('#nav [data-tab]'))) { tab(el.dataset.tab); return; }
+  if ((el = e.target.closest('#app [data-tab]'))) { tab(el.dataset.tab); return; }
   if (!e.target.closest('#app')) return;
+  if ((el = e.target.closest('[data-ltime]'))) { st.stack = [{ v: 'time', time: el.dataset.ltime }]; st.q = ''; render(); return; }
+  if ((el = e.target.closest('[data-cad]'))) { cadAcao(el.dataset.cad); return; }
+  if ((el = e.target.closest('[data-fav]'))) { alternaFav(el.dataset.fav); return; }
+  if ((el = e.target.closest('[data-foto]'))) { const v = baseLarga(); v.foto = +el.dataset.foto; render(); return; }
+  if ((el = e.target.closest('[data-pag]'))) { const id = el.dataset.pag; if (cur().v === 'caderno') selec(id); else { st.stack = [{ v: 'caderno', sel: id }]; render(); } return; }
   if ((el = e.target.closest('[data-pick]'))) { keep(); st.form.forn = el.dataset.pick; st.dd = false; st.ddq = ''; render($('scr').scrollTop); return; }
   if ((el = e.target.closest('[data-ftime]'))) { keep(); const f = st.form; if (f.time !== el.dataset.ftime) { f.time = el.dataset.ftime; f.sub = null; f.proj = null; } render($('scr').scrollTop); return; }
   if ((el = e.target.closest('[data-fsub]'))) { keep(); st.form.sub = el.dataset.fsub; st.form.proj = null; render($('scr').scrollTop); return; }
   if ((el = e.target.closest('[data-fproj]'))) { keep(); st.form.proj = el.dataset.fproj || null; render($('scr').scrollTop); return; }
   if ((el = e.target.closest('[data-fint]'))) { keep(); st.form.int = st.form.int === el.dataset.fint ? null : el.dataset.fint; render($('scr').scrollTop); return; }
-  if ((el = e.target.closest('[data-time]'))) { go({ v: 'time', time: el.dataset.time }); return; }
-  if ((el = e.target.closest('[data-proj]'))) { go({ v: 'projeto', id: el.dataset.proj }); return; }
+  if ((el = e.target.closest('[data-time]'))) { if (LARGO()) { st.stack = [{ v: 'time', time: el.dataset.time }]; render(); } else go({ v: 'time', time: el.dataset.time }); return; }
+  if ((el = e.target.closest('[data-proj]'))) { const id = el.dataset.proj;
+    if (LARGO()) { const p = proj(id); if (cur().v === 'time' && p && p.Time === cur().time) selec(id); else if (p) go({ v: 'time', time: p.Time, sel: id }); return; }
+    go({ v: 'projeto', id }); return; }
   if ((el = e.target.closest('[data-rm]'))) { keep(); const k = +el.dataset.rm; const f = st.form; f.ph[k] = ''; f.th[k] = ''; f.tem[k] = false; f.mud[k] = true; render($('scr').scrollTop); return; }
-  if ((el = e.target.closest('[data-zoom]'))) { const imgs = galAtual.filter(Boolean); const i = galAtual.slice(0, +el.dataset.zoom).filter(Boolean).length; abreLb(imgs, i); return; }
-  if ((el = e.target.closest('[data-prod]'))) { TENTOU.delete(el.dataset.prod); go({ v: 'produto', id: el.dataset.prod }); return; }
-  if ((el = e.target.closest('[data-forn]'))) { TENTOU.delete(el.dataset.forn); go({ v: 'fornecedor', id: el.dataset.forn }); return; }
+  if ((el = e.target.closest('[data-zoom]'))) {
+    const imgs = galAtual.filter(Boolean); const i = galAtual.slice(0, +el.dataset.zoom).filter(Boolean).length;
+    if ($('anotov') && LARGO()) { // desenho visível: a foto ampliada já vem com a anotação
+      const v = baseLarga(); const id = v.v === 'produto' ? v.id : v.sel; const x = todosProdutos().find((p) => p.ID_Produto === id); const sl = x && slotsProduto(x)[+el.dataset.zoom]; const an = sl && anotacaoDe(id, sl.k);
+      if (an && imgs[i]) { (async () => { const t = an.json || await pegaJson('anot:' + an.key, an.url); const d = t && Lousa.ler(t); if (d) { try { imgs[i] = await compoe(imgs[i], d); } catch (er) {} } abreLb(imgs, i); })(); return; } }
+    abreLb(imgs, i); return; }
+  if ((el = e.target.closest('[data-prod]'))) { const id = el.dataset.prod; TENTOU.delete(id); if (LARGO() && cur().v === 'produtos') selec(id); else go({ v: 'produto', id }); return; }
+  if ((el = e.target.closest('[data-forn]'))) { const id = el.dataset.forn; TENTOU.delete(id); if (LARGO() && cur().v === 'forn') selec(id); else go({ v: 'fornecedor', id }); return; }
   if (!(el = e.target.closest('[data-go]'))) return;
   const a = el.dataset.go;
   if (a === 'ddclose') { if (e.target === el) { st.dd = false; st.ddq = ''; render($('scr').scrollTop); } return; }
   if (a === 'back') { if (cur().v === 'form') { st.form = null; st.dd = false; } if (cur().v === 'novoforn') st.ns = null; back(); return; }
   if (a === 'sync') { sync(true, true); return; }
-  if (a === 'editprod') { abreEdicaoProduto(cur().id); return; }
-  if (a === 'delprod') { apagarProduto(cur().id); return; }
-  if (a === 'editforn') { abreEdicaoFornecedor(cur().id); return; }
-  if (a === 'delforn') { apagarFornecedor(cur().id); return; }
+  if (a === 'editprod') { abreEdicaoProduto(alvo()); return; }
+  if (a === 'delprod') { apagarProduto(alvo()); return; }
+  if (a === 'editforn') { abreEdicaoFornecedor(alvo()); return; }
+  if (a === 'delforn') { apagarFornecedor(alvo()); return; }
   if (a === 'novo') { const v = cur(); novoForm(null, v.v === 'time' ? v.time : null); return; }
-  if (a === 'novoproj') { novoForm(cur().id); return; }
+  if (a === 'novoproj') { novoForm(alvo()); return; }
+  if (a === 'comparar') { go({ v: 'comparar', id: alvo() }); return; }
+  if (a === 'anotar') { abreAnotar(); return; }
+  if (a === 'toganot') { const v = baseLarga(); v.semAnot = !v.semAnot; render(); return; }
+  if (a === 'novapag') { novaPagina(); return; }
+  if (a === 'novapagprod') { const x = todosProdutos().find((p) => p.ID_Produto === alvo()); if (x) { const p = proj(x.ID_Projeto); novaPagina({ ID_Produto: x.ID_Produto, ID_Fornecedor: x.ID_Fornecedor || '', Titulo: p ? p.Projeto : 'Achado livre' }); } return; }
+  if (a === 'novapagforn') { const f = forn(alvo()); if (f) novaPagina({ ID_Fornecedor: f.ID_Fornecedor, Titulo: f.Empresa }); return; }
+  if (a === 'ligarpag') { salvaPaginaJa(); ligarPagina(cur().sel); return; }
+  if (a === 'delpag') { apagarPagina(cur().sel); return; }
   if (a === 'dd') { keep(); st.dd = true; st.ddq = ''; render($('scr').scrollTop); return; }
   if (a === 'novoforn') { keep(); st.dd = false; st.ns = { card: null, th: null, n: st.ddq || '', ct: '', em: '', ph: '', st: '' }; st.ddq = ''; go({ v: 'novoforn' }); return; }
   if (a === 'salvar') { salvarProduto(); return; }
   if (a === 'salvarforn') { salvarFornecedor(); return; }
 });
 window.addEventListener('online', () => { refreshBar(); sync(); });
+let eraLargo = null;
+window.addEventListener('resize', () => { const l = LARGO(); if (eraLargo !== null && l !== eraLargo && S.token && S.projetos.length && !loginEl) render(); eraLargo = l; });
 window.addEventListener('offline', refreshBar);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
 setInterval(() => sync(), 30000);
@@ -715,7 +1142,7 @@ setInterval(() => sync(), 30000);
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   db = await openDB();
-  const ks = ['token', 'email', 'projetos', 'times', 'produtos', 'fornecedores', 'outbox', 'img', 'agora', 'lastSup'];
+  const ks = ['token', 'email', 'projetos', 'times', 'produtos', 'fornecedores', 'paginas', 'anotacoes', 'outbox', 'img', 'agora', 'lastSup'];
   const vs = await Promise.all(ks.map(kvGet));
   ks.forEach((k, i) => { if (vs[i] !== undefined && vs[i] !== null) S[k] = vs[i]; });
   S.outbox = S.outbox || [];
