@@ -14,6 +14,7 @@
  *   salvarPagina {token, g} / excluirPagina {token, id}  -> caderno do estande (iPad)
  *   salvarAnotacao {token, a}                 -> desenho da Pencil sobre uma foto do produto
  *   favorito {token, id, on}                  -> marca/desmarca o produto como favorito do usuario
+ *   comentar {token, c} / apagarComentario {token, id}  -> notas do time (painel web)
  */
 
 const CFG = {
@@ -35,7 +36,7 @@ function doPost(e) {
     const d = JSON.parse(e.postData.contents || '{}');
     const acoes = { pedirCodigo, entrar, dados, imagens, salvarFornecedor, salvarProduto,
       editarProduto, excluirProduto, editarFornecedor, excluirFornecedor, foto,
-      salvarPagina, excluirPagina, salvarAnotacao, favorito };
+      salvarPagina, excluirPagina, salvarAnotacao, favorito, comentar, apagarComentario };
     const fn = acoes[d.acao];
     if (!fn) return out({ ok: false, erro: 'acao desconhecida' });
     return out(fn(d));
@@ -126,6 +127,7 @@ function dados(d) {
   const cad = caderno_();
   res.paginas = linhas_(cad.getSheetByName('Paginas')).map(r => Object.assign(r, { thumb: thumbs[r.ID_Pagina] || '' }));
   res.anotacoes = linhas_(cad.getSheetByName('Anotacoes'));
+  res.comentarios = linhas_(abaComentarios_(cad));
   return res;
 }
 
@@ -326,6 +328,34 @@ function caderno_() {
     pr.setProperty('CADERNO_ID', ss.getId());
   }
   return ss;
+}
+function abaComentarios_(ss) {
+  let sh = ss.getSheetByName('Comentarios');
+  if (!sh) { sh = ss.insertSheet('Comentarios'); sh.appendRow(['ID_Comentario', 'ID_Produto', 'Texto', 'Registrado_Por', 'Data_Hora']); }
+  return sh;
+}
+function comentar(d) {
+  const email = usuario_(d.token); const c = d.c || {};
+  if (!c.ID_Comentario || !c.ID_Produto || !String(c.Texto || '').trim()) throw new Error('Nota vazia.');
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = abaComentarios_(caderno_());
+    if (linhaDe_(sh, c.ID_Comentario) > 0) return { ok: true, repetido: true };
+    const o = { ID_Comentario: c.ID_Comentario, ID_Produto: c.ID_Produto, Texto: String(c.Texto).trim().slice(0, 2000), Registrado_Por: email, Data_Hora: fmt_(new Date()) };
+    sh.appendRow(porCabecalho_(sh, o));
+    return { ok: true, linha: o };
+  } finally { lock.releaseLock(); }
+}
+function apagarComentario(d) {
+  const email = usuario_(d.token);
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = abaComentarios_(caderno_()); const row = linhaDe_(sh, d.id);
+    if (row < 0) return { ok: true, jaApagado: true };
+    const o = objeto_(sh, row);
+    if (!podeApagar_(email, o.Registrado_Por)) throw new Error('Só quem escreveu a nota pode apagar.');
+    sh.deleteRow(row); return { ok: true };
+  } finally { lock.releaseLock(); }
 }
 function linhas_(sh) {
   const v = sh.getDataRange().getValues(); const h = v.shift().map(String);

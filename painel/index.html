@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canton Fair 26 · Painel</title>
+<meta name="theme-color" content="#262422">
+<link rel="icon" href="../icons/icon-192.png">
+<link rel="stylesheet" href="painel.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap topin">
+    <a class="logo" href="#/visao"><span class="ww">WESTWING</span><span class="cf">Canton Fair 2026</span></a>
+    <nav class="tabs" aria-label="Seções">
+      <a href="#/visao" data-r="visao">Visão geral</a><a href="#/cobertura" data-r="cobertura">Cobertura</a><a href="#/produtos" data-r="produtos">Produtos</a><a href="#/fornecedores" data-r="fornecedores">Fornecedores</a><a href="#/resumo" data-r="resumo">Resumo do dia</a>
+    </nav>
+    <button type="button" class="upd" id="upd" data-a="atualizar" title="Atualizar agora">Atualizando…</button>
+    <button type="button" class="exp" data-a="exportar">Exportar para Excel</button>
+    <button type="button" class="eu" id="eu" data-a="sair" aria-label="Sair"></button>
+  </div>
+</header>
+<main id="main" class="wrap"></main>
+<div id="modal"></div>
+<script src="../config.js"></script>
+<script src="../lousa.js"></script>
+<script src="painel.js"></script>
+</body>
+</html>

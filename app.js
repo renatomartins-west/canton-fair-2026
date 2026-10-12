@@ -849,6 +849,13 @@ async function salvarFornecedor() {
     toast(navigator.onLine ? 'Alterações salvas. Enviando…' : 'Alterações salvas no celular. Envia sozinho quando voltar a internet.');
     return sync();
   }
+  const igual = n.n.trim() && !n.confirmado ? fornecedorIgual(n.n) : null;
+  if (igual) {
+    const r = await escolha('Fornecedor já existe', `${igual.Empresa}${igual.Estande ? ' · estande ' + igual.Estande : ''}${igual.Registrado_Por ? ' · cadastrado por ' + nomeDe(igual.Registrado_Por) : ''}`, 'Cadastrar outro', 'Usar este');
+    if (r === 'b') { st.ns = null; st.stack.pop(); if (st.form) st.form.forn = igual.ID_Fornecedor; S.lastSup = igual.ID_Fornecedor; kvSet('lastSup', S.lastSup); render(cur().scroll || 0); return; }
+    if (r !== 'a') return;
+    n.confirmado = true;
+  }
   const fo = Object.assign({ ID_Fornecedor: uid('FO') }, campos, { cartao: n.card || '', thumb: n.th || '' });
   S.outbox.push({ kind: 'forn', id: fo.ID_Fornecedor, payload: fo }); // na sincronização, fornecedores novos sobem antes dos produtos
   await saveOutbox();
@@ -880,6 +887,22 @@ async function apagarFornecedor(id) {
 }
 
 /* ================= confirmação e foto ampliada ================= */
+// nomes de empresa comparados sem pontuação, acentos e termos como Co., Ltd., Factory
+const normEmp = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/\b(co|ltd|limited|company|corp|corporation|inc|factory|trading|industrial|industry|group|manufacturing|mfg|international|intl|import|export|imp|exp)\b/g, '').replace(/[^a-z0-9]/g, '');
+function fornecedorIgual(nome) {
+  const n = normEmp(nome); if (n.length < 3) return null;
+  return todosFornecedores().find((f) => { const m = normEmp(f.Empresa); return m && (m === n || (Math.min(m.length, n.length) >= 5 && (m.includes(n) || n.includes(m)))); }) || null;
+}
+// janela com duas escolhas: devolve 'a', 'b' ou null (fechou)
+function escolha(titulo, texto, a, b) {
+  return new Promise((res) => {
+    const el = document.createElement('div'); el.className = 'dd conf';
+    el.innerHTML = `<div class="box"><div class="h">${esc(titulo)}</div><p>${esc(texto)}</p><div class="cb"><button type="button" data-r="a">${esc(a)}</button><button type="button" data-r="b" class="danger">${esc(b)}</button></div></div>`;
+    el.onclick = (e) => { const bt = e.target.closest('[data-r]'); if (bt || e.target === el) { el.remove(); res(bt ? bt.dataset.r : null); } };
+    document.body.appendChild(el);
+  });
+}
 function confirmar(titulo, texto, botao) {
   return new Promise((res) => {
     const el = document.createElement('div'); el.className = 'dd conf';
