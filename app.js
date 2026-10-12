@@ -328,7 +328,7 @@ async function salvarFornecedor() {
 }
 
 /* ================= sincronização ================= */
-async function sync(manual) {
+async function sync(manual, completo) {
   if (syncing || !S.token) return;
   if (!navigator.onLine) { if (manual) toast(S.outbox.length ? `Sem internet. ${S.outbox.length} registro${S.outbox.length > 1 ? 's' : ''} guardado${S.outbox.length > 1 ? 's' : ''} no celular; envia sozinho quando a conexão voltar.` : 'Sem internet no momento.'); refreshBar(); return; }
   syncing = true; refreshBar(); let mudou = false, erroRede = false;
@@ -349,10 +349,17 @@ async function sync(manual) {
       }
     }
     if (!erroRede) {
-      const r = await api('dados', { desde: S.agora });
+      const r = await api('dados', { desde: completo ? '' : S.agora });
       const merge = (lista, novos, key) => { novos.forEach((n) => { const i = lista.findIndex((x) => x[key] === n[key]); if (i >= 0) lista[i] = Object.assign(lista[i], n); else lista.push(n); }); };
-      if (r.produtos.length || r.fornecedores.length) mudou = true;
-      merge(S.produtos, r.produtos, 'ID_Produto'); merge(S.fornecedores, r.fornecedores, 'ID_Fornecedor');
+      if (completo) {
+        // lista inteira do servidor: o que foi apagado na planilha some do celular
+        S.produtos = r.produtos; S.fornecedores = r.fornecedores;
+        if (r.projetos && r.projetos.length) { S.projetos = r.projetos; S.times = r.times; await Promise.all([kvSet('projetos', S.projetos), kvSet('times', S.times)]); }
+        mudou = true;
+      } else {
+        if (r.produtos.length || r.fornecedores.length) mudou = true;
+        merge(S.produtos, r.produtos, 'ID_Produto'); merge(S.fornecedores, r.fornecedores, 'ID_Fornecedor');
+      }
       S.agora = r.agora; await saveCore();
       if (!S.img || !S.img.app || !S.img.app.capa) { try { await baixaImagens(); mudou = true; } catch (e) {} }
     }
@@ -398,7 +405,9 @@ function mostraLogin(msg) {
       try {
         const r = await api('entrar', { email, codigo });
         S.token = r.token; S.email = r.email; await kvSet('token', S.token); await kvSet('email', S.email);
-        loginEl.remove(); loginEl = null; await inicia();
+        loginEl.innerHTML = `<div class="k">WESTWING · GUANGZHOU</div><div class="rule"></div><h1>Canton Fair</h1><div class="y">2026</div>
+         <p><b>Preparando o roteiro…</b><br>Baixando os projetos e as fotos da buylist para o app funcionar sem internet. Leva alguns segundos e só acontece no primeiro acesso.</p>`;
+        await inicia(); if (loginEl) { loginEl.remove(); loginEl = null; }
       } catch (e) { x.textContent = e.servidor ? e.message : 'Não consegui conectar. Tente de novo.'; b.disabled = false; b.textContent = 'Entrar'; }
     };
     loginEl.querySelector('#lgB').onclick = entrar;
@@ -424,7 +433,7 @@ async function inicia() {
     }
     $('nav').classList.remove('hidden');
   }
-  render(0); sync();
+  render(0); sync(false, true);
 }
 
 /* ================= eventos ================= */

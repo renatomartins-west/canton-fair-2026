@@ -9,7 +9,7 @@
 
 :root{
   --bg:#F4F2EF; --bar:#C4161E; --card:#FFFFFF; --tx:#262422; --tx2:#7A746E; --line:#E6E1DA;
-  --red:#C4161E; --deep:#262422; --soft:#FBEDEE; --orange-t:#FFF3E0; --orange:#E65100;
+  --red:#C4161E; --tiffany:#84DAD1; --ink-w:#2F3838; --deep:#262422; --soft:#FBEDEE; --orange-t:#FFF3E0; --orange:#E65100;
   --good:#2E7D32; --good-t:#E8F5E9; --chip:#F1EEEA; --chip-tx:#6B655F;
   --top:env(safe-area-inset-top,0px); --bot:env(safe-area-inset-bottom,0px);
 }
@@ -156,18 +156,18 @@ button{cursor:pointer}
 .cardimg{display:block;width:100%;aspect-ratio:1.75;object-fit:cover;background:#ECE8E2}
 
 /* login e carregamento */
-.login{position:fixed;inset:0;background:var(--red);color:#fff;display:flex;flex-direction:column;justify-content:center;padding:calc(var(--top) + 24px) 28px calc(var(--bot) + 24px);z-index:20}
-.login .k{font-family:"Josefin Sans",sans-serif;font-weight:600;font-size:13px;letter-spacing:.18em;opacity:.92}
-.login .rule{width:34px;height:3px;background:#fff;margin:9px 0 14px}
+.login{position:fixed;inset:0;background:var(--tiffany);color:var(--ink-w);display:flex;flex-direction:column;justify-content:center;padding:calc(var(--top) + 24px) 28px calc(var(--bot) + 24px);z-index:20}
+.login .k{font-family:"Josefin Sans",sans-serif;font-weight:600;font-size:13px;letter-spacing:.18em}
+.login .rule{width:34px;height:3px;background:var(--ink-w);margin:9px 0 14px}
 .login h1{font-family:"Cormorant Garamond",Georgia,serif;font-style:italic;font-weight:600;font-size:56px;line-height:.95;margin:0}
 .login .y{font-family:"Josefin Sans",sans-serif;font-weight:600;font-size:30px;margin-top:6px}
-.login p{font-size:14.5px;line-height:1.45;opacity:.92;margin:26px 0 14px;max-width:34ch}
-.login input{width:100%;border:none;border-radius:10px;padding:15px 14px;font-size:17px;color:var(--tx);outline:none}
+.login p{font-size:14.5px;line-height:1.45;margin:26px 0 14px;max-width:34ch}
+.login input{width:100%;border:none;border-radius:10px;padding:15px 14px;font-size:17px;color:var(--tx);outline:none;background:#fff}
 .login input.code{letter-spacing:.4em;text-align:center;font-size:24px;font-weight:700}
-.login button.go{width:100%;margin-top:12px;border:none;border-radius:10px;background:#fff;color:var(--red);font-weight:700;font-size:16px;padding:15px}
+.login button.go{width:100%;margin-top:12px;border:none;border-radius:10px;background:var(--ink-w);color:#fff;font-weight:700;font-size:16px;padding:15px}
 .login button.go:disabled{opacity:.6}
-.login .lnk{background:none;border:none;color:#fff;opacity:.9;text-decoration:underline;margin-top:14px;font-size:14px;align-self:flex-start;padding:0}
-.login .err{min-height:20px;margin-top:10px;font-size:14px;color:#FFE1A8}
+.login .lnk{background:none;border:none;color:var(--ink-w);text-decoration:underline;margin-top:14px;font-size:14px;align-self:flex-start;padding:0}
+.login .err{min-height:20px;margin-top:10px;font-size:14px;color:#9B1118;font-weight:500}
 .load{padding:60px 28px;text-align:center;color:var(--tx2);line-height:1.5}
 .load b{display:block;color:var(--tx);font-size:17px;font-weight:500;margin-bottom:6px}
 
