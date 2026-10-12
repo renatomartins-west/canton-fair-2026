@@ -1,5 +1,5 @@
 // Guarda a "casca" do app no celular para abrir sem internet.
-const CACHE = 'cf26-teste-v1';
+const CACHE = 'cf26-teste-v2';
 const SHELL = [
   './', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'fonts/josefin-sans-latin-400-normal.woff2', 'fonts/josefin-sans-latin-600-normal.woff2',
