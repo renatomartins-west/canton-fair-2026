@@ -158,7 +158,7 @@ function vHome() {
      <div class="prog"><i style="width:${ps.length ? Math.round(feitos / ps.length * 100) : 0}%"></i></div>
      <div class="mini"><span>${ach} achado${ach !== 1 ? 's' : ''}</span><span>${subs} subcategorias</span></div></button>`;
   }).join('');
-  const corpo = st.q.trim() ? resultados() : `<div class="hello"><b>Roteiro da feira</b>${S.projetos.length} projetos em ${T.length} times · toque num time para começar</div>
+  const corpo = st.q.trim() ? resultados() : `<div class="hello"><b>Roteiro da feira</b>${S.projetos.length} projetos em ${T.length} times</div>
    <div class="sec">Times<span>${comAchado} de ${S.projetos.length} com produto achado</span></div><div class="tiles">${tiles}</div><div style="height:80px"></div>`;
   return `${capa ? `<img class="banner" src="${capa}" alt="Canton Fair 2026">` : '<div class="banner"></div>'}
    <label class="search">${I.search}<input id="q" type="search" placeholder="Buscar projeto, coleção ou tipo" value="${esc(st.q)}" autocomplete="off" enterkeyhint="search"></label>

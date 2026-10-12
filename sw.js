@@ -1,5 +1,5 @@
 // Guarda a "casca" do app no celular para abrir sem internet. Os dados ficam no IndexedDB.
-const CACHE = 'cf26-app-v8';
+const CACHE = 'cf26-app-v9';
 const SHELL = [
   './', 'index.html', 'app.css', 'app.js', 'config.js', 'lousa.js', 'manifest.webmanifest',
   'fonts/roboto-latin-400-normal.woff2', 'fonts/roboto-latin-500-normal.woff2', 'fonts/roboto-latin-700-normal.woff2',
