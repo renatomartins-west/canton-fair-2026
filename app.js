@@ -8,6 +8,15 @@ const num = (v) => { const n = parseFloat(String(v ?? '').replace(/\s/g, '').rep
 const brl = (v) => (v == null || v === '' || isNaN(v)) ? '' : v >= 1e6 ? 'R$ ' + (v / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi' : 'R$ ' + Math.round(v / 1e3).toLocaleString('pt-BR') + ' mil';
 const usd = (v) => v == null || v === '' ? '' : 'US$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const uid = (p) => p + '-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+// Data_Hora vem do servidor já no horário de Brasília ("2026-10-12T00:24:10") ou, logo após o envio, do celular em UTC ("...Z")
+const quando = (s) => {
+  s = String(s || ''); let d;
+  if (/Z$|[+-]\d\d:\d\d$/.test(s)) d = new Date(s);
+  else { const m = s.match(/^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)/); if (!m) return s; return `${m[3]}/${m[2]} às ${m[4]}:${m[5]}`; }
+  if (isNaN(d)) return s;
+  const p = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d).reduce((o, x) => (o[x.type] = x.value, o), {});
+  return `${p.day}/${p.month} às ${p.hour}:${p.minute}`;
+};
 const nomeDe = (email) => String(email || '').split('@')[0].split('.').map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
 
 const I = {
@@ -165,7 +174,7 @@ function vProduto(id) {
     ${alvo ? `<div><small>FOB alvo</small><b class="num">${esc(p.FOB_Alvo)}</b></div>` : ''}<div><small>Interesse</small><b>${esc(x.Interesse || 'Não informado')}</b></div></div></div>
    ${fld('Fornecedor', f ? esc(f.Empresa) : '', f ? `data-forn="${esc(f.ID_Fornecedor)}" role="button"` : '')}
    ${fld('Anotações', esc(x.Anotacoes))}
-   ${fld('Registrado por', x._pend ? 'Você · aguardando envio' : esc(nomeDe(x.Registrado_Por)) + (x.Data_Hora ? ' · ' + esc(String(x.Data_Hora).replace('T', ' ').slice(0, 16)) : ''))}
+   ${fld('Registrado por', x._pend ? 'Você · aguardando envio' : esc(nomeDe(x.Registrado_Por)) + (x.Data_Hora ? ' · ' + esc(quando(x.Data_Hora)) : ''))}
    ${p ? `<button class="addp" data-proj="${esc(p.ID_Projeto)}" style="background:#fff;color:var(--red);box-shadow:inset 0 0 0 1px var(--red)">Ver projeto na buylist</button>` : ''}<div style="height:20px"></div>`;
 }
 function vFornecedores() {
