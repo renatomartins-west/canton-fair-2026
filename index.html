@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Canton Fair 26</title>
+<meta name="theme-color" content="#F4F2EF">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Canton Fair 26">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <div class="brand">Canton Fair</div>
+    <div class="sub">TESTE OFFLINE · WESTWING</div>
+  </div>
+  <div id="net" class="pill">…</div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Novo produto</h2>
+    <label class="photo" id="photoBox">
+      <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+      <img id="preview" alt="" hidden>
+      <span id="photoHint"><b>Tirar foto</b><br>toque para abrir a câmera</span>
+    </label>
+
+    <div class="field">
+      <span>FOB (USD)</span>
+      <input id="fob" inputmode="decimal" placeholder="0,00" autocomplete="off">
+    </div>
+    <div class="field">
+      <span>Anotação</span>
+      <input id="nota" placeholder="opcional" autocomplete="off">
+    </div>
+    <button id="save" class="btn">Salvar</button>
+    <p id="msg" class="msg"></p>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <h2>Registros neste celular</h2>
+      <button id="sync" class="link">Sincronizar</button>
+    </div>
+    <ul id="list" class="list"></ul>
+    <p id="empty" class="muted">Nenhum registro ainda.</p>
+  </section>
+
+  <p class="foot">Versão de teste · os dados vão para a planilha CF26_Teste_Offline</p>
+</main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
