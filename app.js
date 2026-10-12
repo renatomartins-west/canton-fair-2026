@@ -151,24 +151,24 @@ function vHome() {
 function resultados() {
   const q = st.q.trim().toLowerCase(); const cont = contaPorProjeto();
   const r = S.projetos.filter((p) => [p.Projeto, p['Coleção'], p.Subcategoria, p.Tipo, p.Time].join(' ').toLowerCase().includes(q));
-  return `<div class="sec">Resultados<span>${r.length} projeto${r.length !== 1 ? 's' : ''}</span></div>${r.map((p) => projRow(p, cont)).join('') || '<div class="empty">Nada encontrado. Use o botão Produto para registrar um achado novo.</div>'}<div style="height:80px"></div>`;
+  return `<div class="sec">Resultados<span>${r.length} projeto${r.length !== 1 ? 's' : ''}</span></div>${r.length ? `<div class="list">${r.map((p) => projRow(p, cont)).join('')}</div>` : '<div class="empty">Nada encontrado. Use o botão Produto para registrar um achado novo.</div>'}<div style="height:80px"></div>`;
 }
 function vTime(t) {
   const cont = contaPorProjeto(); const g = {};
   S.projetos.filter((p) => p.Time === t).forEach((p) => (g[p.Subcategoria] = g[p.Subcategoria] || []).push(p));
-  return Object.entries(g).sort((a, b) => b[1].length - a[1].length).map(([k, v]) => `<div class="ghead">${esc(k)}<span>${v.length}</span></div>${v.sort((a, b) => (num(b.CMV_12M) || 0) - (num(a.CMV_12M) || 0)).map((p) => projRow(p, cont)).join('')}`).join('') + '<div style="height:90px"></div>' + fab();
+  return Object.entries(g).sort((a, b) => b[1].length - a[1].length).map(([k, v]) => `<div class="ghead">${esc(k)}<span>${v.length}</span></div><div class="list">${v.sort((a, b) => (num(b.CMV_12M) || 0) - (num(a.CMV_12M) || 0)).map((p) => projRow(p, cont)).join('')}</div>`).join('') + '<div style="height:90px"></div>' + fab();
 }
 function vProjeto(id) {
   const p = proj(id); if (!p) return '<div class="empty">Projeto não encontrado.</div>';
   const im = projImg(p); const ps = prodsDoProjeto(id).slice().sort((a, b) => (num(a.FOB_USD) || 9e9) - (num(b.FOB_USD) || 9e9));
-  return `<div class="refwrap">${im ? `<img class="refimg" src="${im}" alt="Foto de referência">` : `<div class="refimg refnone">${I.img}Sem foto na buylist</div>`}${im ? '<span class="reftag">Foto da buylist</span>' : ''}</div>
+  return `<div class="split"><div class="sl"><div class="refwrap">${im ? `<img class="refimg" src="${im}" alt="Foto de referência">` : `<div class="refimg refnone">${I.img}Sem foto na buylist</div>`}${im ? '<span class="reftag">Foto da buylist</span>' : ''}</div></div><div class="sr">
    <div class="hero"><div class="k">${esc([p.Time, p.Subcategoria, p.Tipo].filter(Boolean).join(' · '))}</div><div class="v">${esc(p.Projeto)}</div>
     <div class="g"><div><small>FOB alvo</small>${p.FOB_Alvo ? `<b class="num">${esc(p.FOB_Alvo)}</b>` : '<span class="todo">A preencher</span>'}</div>
     <div><small>MOQ alvo</small>${p.MOQ_Alvo !== '' && p.MOQ_Alvo != null ? `<b class="num">${esc(p.MOQ_Alvo)} pcs</b>` : '<span class="todo">A preencher</span>'}</div>
     <div><small>CMV 12M</small><b class="num">${num(p.CMV_12M) ? brl(num(p.CMV_12M)) : 'Sem dado'}</b></div><div><small>SKUs</small><b class="num">${p.SKUs !== '' && p.SKUs != null ? esc(p.SKUs) : 'Sem dado'}</b></div></div></div>
    <button class="addp" data-go="novoproj">Adicionar produto encontrado</button>
    <div class="sec">Produtos encontrados na feira<span>${ps.length}</span></div>
-   ${ps.map((x, i) => rowProduto(x, { semProjeto: true, melhor: i === 0 && ps.length > 1 })).join('') || '<div class="empty">Nenhum ainda.</div>'}<div style="height:24px"></div>`;
+   ${ps.map((x, i) => rowProduto(x, { semProjeto: true, melhor: i === 0 && ps.length > 1 })).join('') || '<div class="empty">Nenhum ainda.</div>'}<div style="height:24px"></div></div></div>`;
 }
 function rowProduto(x, o) {
   o = o || {}; const p = proj(x.ID_Projeto); const f = forn(x.ID_Fornecedor);
@@ -181,7 +181,7 @@ function rowProduto(x, o) {
 }
 function vProdutos() {
   const ps = todosProdutos(); if (!ps.length) return '<div class="empty">Nenhum produto registrado ainda. Toque em <b>Produto</b> para registrar o primeiro achado.</div>' + fab();
-  return timesOrdenados().map((t) => { const a = ps.filter((p) => p.Time === t); return a.length ? `<div class="ghead">${esc(t)}<span>${a.length}</span></div>${a.map((x) => rowProduto(x)).join('')}` : ''; }).join('') + '<div style="height:90px"></div>' + fab();
+  return timesOrdenados().map((t) => { const a = ps.filter((p) => p.Time === t); return a.length ? `<div class="ghead">${esc(t)}<span>${a.length}</span></div><div class="list">${a.map((x) => rowProduto(x)).join('')}</div>` : ''; }).join('') + '<div style="height:90px"></div>' + fab();
 }
 function podeApagar(x) { return !!x && (x._pend || S.email === ADMIN || String(x.Registrado_Por || '').toLowerCase() === S.email); }
 function urlsProduto(x) { return [1, 2, 3, 4].map((k) => x['Foto_' + k] || ''); }
@@ -227,7 +227,7 @@ function vProduto(id) {
   if (!x._pend && !TENTOU.has(id)) { TENTOU.add(id); setTimeout(() => garanteFotos(id, urlsProduto(x), String(x.Registrado_Por || '').toLowerCase() !== S.email)); }
   const fld = (l, v, data) => `<div class="field" ${data || ''}><div class="l">${l}</div><div class="v ${v ? '' : 'muted'}">${v || 'Não informado'}</div></div>`;
   const alvo = faixaAlvo(p); const fob = num(x.FOB_USD);
-  return `${galeria(slotsProduto(x), 'Sem foto')}
+  return `<div class="split"><div class="sl">${galeria(slotsProduto(x), 'Sem foto')}</div><div class="sr">
    <div class="hero"><div class="k">${esc([x.Time, x.Subcategoria].filter(Boolean).join(' · '))}</div><div class="v">${esc(p ? p.Projeto : 'Achado livre')}</div>
     <div class="g"><div><small>FOB</small><b class="num">${usd(fob)}</b></div><div><small>MOQ</small><b class="num">${x.MOQ !== '' && x.MOQ != null ? esc(x.MOQ) + ' pcs' : '<span class="todo">Não informado</span>'}</b></div>
     ${alvo ? `<div><small>FOB alvo</small><b class="num">${esc(p.FOB_Alvo)}</b></div>` : ''}<div><small>Interesse</small><b>${esc(x.Interesse || 'Não informado')}</b></div></div></div>
@@ -235,7 +235,7 @@ function vProduto(id) {
    ${fld('Anotações', esc(x.Anotacoes))}
    ${fld('Registrado por', x._pend ? 'Você · aguardando envio' : esc(nomeDe(x.Registrado_Por)) + (x.Data_Hora ? ' · ' + esc(quando(x.Data_Hora)) : ''))}
    ${p ? `<button class="addp out" data-proj="${esc(p.ID_Projeto)}">Ver projeto na buylist</button>` : ''}
-   ${acoes('prod', x)}<div style="height:20px"></div>`;
+   ${acoes('prod', x)}<div style="height:20px"></div></div></div>`;
 }
 function vFornecedores() {
   const fs = todosFornecedores().slice().sort((a, b) => String(a.Empresa).localeCompare(String(b.Empresa)));
@@ -255,10 +255,10 @@ function vFornecedor(id) {
     const c = FOTOS[id]; const full = c && c.f[0] && (!c.u[0] || !f.Foto_Cartao || c.u[0] === f.Foto_Cartao) ? c.f[0] : '';
     slots = full ? [{ full }] : (f.Foto_Cartao || f.thumb ? [{ url: f.Foto_Cartao, th: f.thumb }] : []);
   }
-  return `${galeria(slots, 'Sem foto do cartão').replace('<div class="gal">', '<div class="gal card">')}
+  return `<div class="split"><div class="sl">${galeria(slots, 'Sem foto do cartão').replace('<div class="gal">', '<div class="gal card">')}</div><div class="sr">
    ${fld('Empresa', f.Empresa)}${fld('Contato', f.Contato)}${fld('E-mail', f.Email)}${fld('Telefone / WeChat', f.Telefone_WeChat)}${fld('Estande', f.Estande)}
    ${acoes('forn', f)}
-   <div class="sec">Produtos<span>${ps.length}</span></div>${ps.map((x) => rowProduto(x)).join('') || '<div class="empty">Nenhum produto ligado a este fornecedor.</div>'}<div style="height:24px"></div>`;
+   <div class="sec">Produtos<span>${ps.length}</span></div>${ps.map((x) => rowProduto(x)).join('') || '<div class="empty">Nenhum produto ligado a este fornecedor.</div>'}<div style="height:24px"></div></div></div>`;
 }
 
 /* ---------- formulário de produto ---------- */

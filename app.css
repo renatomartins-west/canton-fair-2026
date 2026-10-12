@@ -210,3 +210,28 @@ button{cursor:pointer}
 
 .toast{position:fixed;left:12px;right:12px;max-width:616px;margin:0 auto;bottom:calc(var(--bot) + 140px);background:#323232;color:#fff;border-radius:6px;padding:12px 14px;font-size:14px;z-index:30;box-shadow:0 4px 12px rgba(0,0,0,.25)}
 .hidden{display:none!important}
+
+/* iPad e telas largas: mesmo visual, aproveitando a largura */
+@media (min-width:820px){
+  #app{max-width:1180px}
+  .banner{aspect-ratio:1180/470;object-position:center top}
+  .search{max-width:640px;margin:-26px auto 0}
+  .hello,.sec,.ghead{padding-left:20px;padding-right:20px}
+  .tiles{grid-template-columns:repeat(4,1fr);gap:14px;padding:4px 20px 20px}
+  .list{display:grid;grid-template-columns:1fr 1fr;background:#fff;border-bottom:1px solid var(--line)}
+  .list .row:nth-child(odd){border-right:1px solid var(--line)}
+  .gallery{grid-template-columns:repeat(4,1fr);gap:14px;padding:16px 20px}
+  .fab{right:max(24px,calc(50% - 566px));bottom:calc(var(--bot) + 80px)}
+  .split{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);align-items:start;min-height:100%}
+  .split .sl{position:sticky;top:0;background:#111;min-height:calc(100vh - 140px);display:flex;flex-direction:column;justify-content:center}
+  .split .sl .refwrap,.split .sl .refimg{height:100%}
+  .split .sl .refimg{aspect-ratio:auto;min-height:calc(100vh - 140px)}
+  .split .sl .gimg{aspect-ratio:auto;height:calc(100vh - 175px)}
+  .split .sl .gal.card .gimg{background:#ECE8E2}
+  .split .sl .galnote{color:#bbb;padding:8px 16px}
+  .split .sr{min-width:0;border-left:1px solid var(--line)}
+  .form{max-width:720px;margin:0 auto}
+  .formbar,.dd .box{max-width:720px}
+  .toast{max-width:520px}
+  .conf .box{max-width:400px}
+}
