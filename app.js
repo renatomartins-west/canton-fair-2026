@@ -46,7 +46,12 @@ async function api(acao, body) {
   try {
     const r = await fetch(window.CF26.ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ acao, token: S.token }, body || {})), signal: ctl.signal });
     const j = await r.json();
-    if (!j.ok) { if (j.erro === 'LOGIN') throw new LoginErr('LOGIN'); const e = new Error(j.erro || 'erro'); e.servidor = true; throw e; }
+    if (!j.ok) {
+      if (j.erro === 'LOGIN') throw new LoginErr('LOGIN');
+      let msg = j.erro || 'erro';
+      if (/permiss|authoriz|https?:\/\/|Exception|TypeError/i.test(msg)) { console.warn('servidor:', msg); msg = 'O servidor do app está em manutenção. Tente de novo em alguns minutos ou avise o Renato.'; }
+      const e = new Error(msg); e.servidor = true; throw e;
+    }
     return j;
   } finally { clearTimeout(tm); }
 }
