@@ -28,8 +28,13 @@ const I = {
   cam: '<svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>',
   img: '<svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>',
   store: '<svg viewBox="0 0 24 24"><path d="M20 4H4v2h16V4zm1 10v-2l-1-5H4l-1 5v2h1v6h10v-6h4v6h2v-6h1zm-9 4H6v-4h6v4z"/></svg>',
-  down: '<svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>'
+  down: '<svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>',
+  edit: '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
+  del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
+  x: '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
+  zoom: '<svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm.5-7H9v2H7v1h2v2h1v-2h2V9h-2z"/></svg>'
 };
+const ADMIN = 'renato.martins@westwing.com.br';
 const ph = (cls) => `<div class="${cls}">${I.img}</div>`;
 
 /* ================= armazenamento local (IndexedDB) ================= */
@@ -43,6 +48,22 @@ function openDB() {
 }
 const kvGet = (k) => new Promise((res) => { const t = db.transaction('kv').objectStore('kv').get(k); t.onsuccess = () => res(t.result); t.onerror = () => res(undefined); });
 const kvSet = (k, v) => new Promise((res, rej) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); });
+const kvDel = (k) => new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').delete(k); t.oncomplete = res; t.onerror = res; });
+
+/* fotos em alta: as do próprio celular ficam guardadas; as dos outros são baixadas ao abrir e guardadas (até 80 itens) */
+const FOTOS = {}; // id -> [dataUrl|'' x4]
+async function fotosLocais(id) { if (!(id in FOTOS)) FOTOS[id] = (await kvGet('fotos:' + id)) || null; return FOTOS[id]; }
+async function guardaFotos(id, arr, deOutro) {
+  FOTOS[id] = arr; await kvSet('fotos:' + id, arr);
+  const idx = ((await kvGet('fotosIdx')) || []).filter((x) => x !== id);
+  if (!deOutro) await kvSet('fotosIdx', idx);
+  else {
+    idx.push(id);
+    while (idx.length > 80) { const v = idx.shift(); delete FOTOS[v]; await kvDel('fotos:' + v); }
+    await kvSet('fotosIdx', idx);
+  }
+}
+async function apagaFotos(id) { delete FOTOS[id]; await kvDel('fotos:' + id); }
 
 const S = { token: null, email: null, projetos: [], times: [], produtos: [], fornecedores: [], outbox: [], img: null, agora: '', lastSup: null };
 const saveCore = () => Promise.all([kvSet('produtos', S.produtos), kvSet('fornecedores', S.fornecedores), kvSet('agora', S.agora)]);
@@ -162,20 +183,59 @@ function vProdutos() {
   const ps = todosProdutos(); if (!ps.length) return '<div class="empty">Nenhum produto registrado ainda. Toque em <b>Produto</b> para registrar o primeiro achado.</div>' + fab();
   return timesOrdenados().map((t) => { const a = ps.filter((p) => p.Time === t); return a.length ? `<div class="ghead">${esc(t)}<span>${a.length}</span></div>${a.map((x) => rowProduto(x)).join('')}` : ''; }).join('') + '<div style="height:90px"></div>' + fab();
 }
+function podeApagar(x) { return !!x && (x._pend || S.email === ADMIN || String(x.Registrado_Por || '').toLowerCase() === S.email); }
+function urlsProduto(x) { return [1, 2, 3, 4].map((k) => x['Foto_' + k] || ''); }
+// cada foto do produto: alta (se já está no celular), miniatura (enquanto a alta não chega) e endereço no Drive
+function slotsProduto(x) {
+  if (x._pend) return (x.fotos || []).filter(Boolean).map((u) => ({ full: u }));
+  const c = FOTOS[x.ID_Produto]; const us = urlsProduto(x); const out = [];
+  for (let k = 0; k < 4; k++) { const full = c && c.f[k] && (!c.u[k] || !us[k] || c.u[k] === us[k]) ? c.f[k] : ''; if (us[k] || full) out.push({ url: us[k], full }); }
+  if (!out.length && x.thumb) out.push({ full: '' });
+  if (out[0] && !out[0].full) out[0].th = x.thumb;
+  return out;
+}
+const TENTOU = new Set(); const BAIXANDO = new Set();
+async function garanteFotos(id, urls, deOutro) {
+  if (BAIXANDO.has(id)) return; BAIXANDO.add(id);
+  try {
+    const c = (await fotosLocais(id)) || { u: [], f: [] };
+    const falta = urls.map((u, k) => (u && !(c.f[k] && (!c.u[k] || c.u[k] === u)) ? k : -1)).filter((k) => k >= 0);
+    if (falta.length && navigator.onLine && S.token) {
+      let veio = false;
+      await Promise.all(falta.map(async (k) => { try { const r = await api('foto', { id: urls[k] }); c.f[k] = r.foto; c.u[k] = urls[k]; veio = true; } catch (e) {} }));
+      if (veio) await guardaFotos(id, c, deOutro);
+    }
+  } finally { BAIXANDO.delete(id); }
+  const v = cur(); if ((v.v === 'produto' || v.v === 'fornecedor') && v.id === id && !lb) render($('scr').scrollTop);
+}
+let galAtual = [];
+function galeria(slots, vazio) {
+  galAtual = slots.map((s) => s.full || s.th || '');
+  if (!slots.length) return `<div class="refimg refnone">${I.img}${vazio}</div>`;
+  const on = navigator.onLine;
+  return `<div class="gal">${slots.map((s, i) => { const src = s.full || s.th;
+    return src ? `<button class="gimg" data-zoom="${i}"><img src="${src}" alt="">${!s.full && s.url ? `<span class="gload">${on ? 'Carregando a foto em alta…' : 'Sem internet: mostrando a miniatura'}</span>` : `<span class="gzoom">${I.zoom}</span>`}</button>`
+      : `<div class="gimg gph">${I.img}<span>${on ? 'Carregando foto…' : 'A foto aparece quando houver internet'}</span></div>`; }).join('')}</div>
+   <div class="galnote">${slots.length > 1 ? slots.length + ' fotos · deslize para o lado · ' : ''}toque para ampliar</div>`;
+}
+function acoes(tipo, x) {
+  return `<div class="acts"><button type="button" data-go="edit${tipo}">${I.edit}Editar</button>${podeApagar(x) ? `<button type="button" class="del" data-go="del${tipo}">${I.del}Apagar</button>` : ''}</div>`;
+}
 function vProduto(id) {
-  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x) return '<div class="empty">Produto não encontrado.</div>';
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x) return '<div class="empty">Produto não encontrado. Ele pode ter sido apagado.</div>';
   const p = proj(x.ID_Projeto); const f = forn(x.ID_Fornecedor);
-  const fotos = (x.fotos && x.fotos.length ? x.fotos : (x.thumb ? [x.thumb] : []));
+  if (!x._pend && !TENTOU.has(id)) { TENTOU.add(id); setTimeout(() => garanteFotos(id, urlsProduto(x), String(x.Registrado_Por || '').toLowerCase() !== S.email)); }
   const fld = (l, v, data) => `<div class="field" ${data || ''}><div class="l">${l}</div><div class="v ${v ? '' : 'muted'}">${v || 'Não informado'}</div></div>`;
   const alvo = faixaAlvo(p); const fob = num(x.FOB_USD);
-  return `${fotos.length ? `<div class="gal">${fotos.map((u) => `<img src="${u}" alt="">`).join('')}</div>${fotos.length > 1 ? `<div class="galnote">${fotos.length} fotos · deslize para o lado</div>` : ''}` : `<div class="refimg refnone">${I.img}Sem foto</div>`}
+  return `${galeria(slotsProduto(x), 'Sem foto')}
    <div class="hero"><div class="k">${esc([x.Time, x.Subcategoria].filter(Boolean).join(' · '))}</div><div class="v">${esc(p ? p.Projeto : 'Achado livre')}</div>
-    <div class="g"><div><small>FOB</small><b class="num">${usd(fob)}</b></div><div><small>MOQ</small><b class="num">${x.MOQ ? esc(x.MOQ) + ' pcs' : '<span class="todo">Não informado</span>'}</b></div>
+    <div class="g"><div><small>FOB</small><b class="num">${usd(fob)}</b></div><div><small>MOQ</small><b class="num">${x.MOQ !== '' && x.MOQ != null ? esc(x.MOQ) + ' pcs' : '<span class="todo">Não informado</span>'}</b></div>
     ${alvo ? `<div><small>FOB alvo</small><b class="num">${esc(p.FOB_Alvo)}</b></div>` : ''}<div><small>Interesse</small><b>${esc(x.Interesse || 'Não informado')}</b></div></div></div>
    ${fld('Fornecedor', f ? esc(f.Empresa) : '', f ? `data-forn="${esc(f.ID_Fornecedor)}" role="button"` : '')}
    ${fld('Anotações', esc(x.Anotacoes))}
    ${fld('Registrado por', x._pend ? 'Você · aguardando envio' : esc(nomeDe(x.Registrado_Por)) + (x.Data_Hora ? ' · ' + esc(quando(x.Data_Hora)) : ''))}
-   ${p ? `<button class="addp" data-proj="${esc(p.ID_Projeto)}" style="background:#fff;color:var(--red);box-shadow:inset 0 0 0 1px var(--red)">Ver projeto na buylist</button>` : ''}<div style="height:20px"></div>`;
+   ${p ? `<button class="addp out" data-proj="${esc(p.ID_Projeto)}">Ver projeto na buylist</button>` : ''}
+   ${acoes('prod', x)}<div style="height:20px"></div>`;
 }
 function vFornecedores() {
   const fs = todosFornecedores().slice().sort((a, b) => String(a.Empresa).localeCompare(String(b.Empresa)));
@@ -185,18 +245,26 @@ function vFornecedores() {
     return `<button class="gcard" data-forn="${esc(f.ID_Fornecedor)}">${im ? `<img class="im" src="${im}" alt="">` : `<div class="im">${I.store}</div>`}<div class="c"><b>${esc(f.Empresa)}</b><span>${n} produto${n !== 1 ? 's' : ''}${f.Contato ? ' · ' + esc(f.Contato) : ''}${f._pend ? ' · na fila' : ''}</span></div></button>`; }).join('')}</div><div style="height:90px"></div>${fab()}`;
 }
 function vFornecedor(id) {
-  const f = forn(id); if (!f) return '<div class="empty">Fornecedor não encontrado.</div>';
+  const f = forn(id); if (!f) return '<div class="empty">Fornecedor não encontrado. Ele pode ter sido apagado.</div>';
   const ps = todosProdutos().filter((p) => p.ID_Fornecedor === id);
   const fld = (l, v) => `<div class="field"><div class="l">${l}</div><div class="v ${v ? '' : 'muted'}">${v ? esc(v) : 'Preencher depois'}</div></div>`;
-  return `${f.cartao || f.thumb ? `<img class="cardimg" src="${f.cartao || f.thumb}" alt="Cartão de visita">` : `<div class="cardimg refnone">${I.store}Sem foto do cartão</div>`}
-   ${fld('Contato', f.Contato)}${fld('E-mail', f.Email)}${fld('Telefone / WeChat', f.Telefone_WeChat)}${fld('Estande', f.Estande)}
+  let slots;
+  if (f._pend) slots = f.cartao ? [{ full: f.cartao }] : (f.thumb ? [{ th: f.thumb }] : []);
+  else {
+    if (!TENTOU.has(id)) { TENTOU.add(id); setTimeout(() => garanteFotos(id, [f.Foto_Cartao || ''], String(f.Registrado_Por || '').toLowerCase() !== S.email)); }
+    const c = FOTOS[id]; const full = c && c.f[0] && (!c.u[0] || !f.Foto_Cartao || c.u[0] === f.Foto_Cartao) ? c.f[0] : '';
+    slots = full ? [{ full }] : (f.Foto_Cartao || f.thumb ? [{ url: f.Foto_Cartao, th: f.thumb }] : []);
+  }
+  return `${galeria(slots, 'Sem foto do cartão').replace('<div class="gal">', '<div class="gal card">')}
+   ${fld('Empresa', f.Empresa)}${fld('Contato', f.Contato)}${fld('E-mail', f.Email)}${fld('Telefone / WeChat', f.Telefone_WeChat)}${fld('Estande', f.Estande)}
+   ${acoes('forn', f)}
    <div class="sec">Produtos<span>${ps.length}</span></div>${ps.map((x) => rowProduto(x)).join('') || '<div class="empty">Nenhum produto ligado a este fornecedor.</div>'}<div style="height:24px"></div>`;
 }
 
 /* ---------- formulário de produto ---------- */
 function novoForm(projId, time) {
   const p = projId ? proj(projId) : null;
-  st.form = { fixed: !!p, proj: p ? p.ID_Projeto : null, time: p ? p.Time : (time || null), sub: p ? p.Subcategoria : null, forn: null, fob: '', moq: '', int: null, nota: '', ph: [], th: [] };
+  st.form = { fixed: !!p, proj: p ? p.ID_Projeto : null, time: p ? p.Time : (time || null), sub: p ? p.Subcategoria : null, forn: null, fob: '', moq: '', int: null, nota: '', ph: [], th: [], tem: [], mud: [] };
   go({ v: 'form' });
 }
 function vForm() {
@@ -204,7 +272,9 @@ function vForm() {
   const subs = f.time ? [...new Set(S.projetos.filter((x) => x.Time === f.time).map((x) => x.Subcategoria))].sort() : [];
   const sugg = (!f.fixed && f.time && f.sub) ? S.projetos.filter((x) => x.Time === f.time && x.Subcategoria === f.sub) : [];
   return `<div class="form">
-  <div class="fi"><span class="lab">Fotos do produto</span><div class="imgf">${[0, 1, 2, 3].map((k) => `<label class="imgbtn ${k === 0 && !f.ph[0] ? 'first' : ''}">${f.th[k] ? `<img src="${f.th[k]}" alt="">` : I.cam + (k === 0 ? 'Foto' : '+')}<input type="file" accept="image/*" capture="environment" data-ph="${k}" hidden></label>`).join('')}</div></div>
+  <div class="fi"><span class="lab">Fotos do produto</span><div class="imgf">${[0, 1, 2, 3].map((k) => { const tem = f.th[k] || f.tem[k];
+    return `<div class="slot"><label class="imgbtn ${k === 0 && !tem ? 'first' : ''}">${f.th[k] ? `<img src="${f.th[k]}" alt="">` : f.tem[k] ? I.img + 'Foto salva' : I.cam + (k === 0 ? 'Foto' : '+')}<input type="file" accept="image/*" capture="environment" data-ph="${k}" hidden></label>${tem ? `<button type="button" class="rm" data-rm="${k}" aria-label="Tirar foto">${I.x}</button>` : ''}</div>`; }).join('')}</div>
+   ${f.edit ? '<div class="hint">Toque numa foto para trocar, ou no x para tirar.</div>' : ''}</div>
   ${f.fixed ? `<div class="fi"><span class="lab">Projeto da buylist</span><div class="ro">${esc(p.Projeto)}<small>${esc(p.Time)} · ${esc(p.Subcategoria)}${p.FOB_Alvo ? ' · alvo ' + esc(p.FOB_Alvo) : ''}</small></div></div>` : `
   <div class="fi"><span class="lab req">Time</span><div class="enum">${timesOrdenados().map((t) => `<button type="button" data-ftime="${esc(t)}" aria-pressed="${f.time === t}">${esc(t)}</button>`).join('')}</div></div>
   ${f.time ? `<div class="fi"><span class="lab req">Subcategoria</span><div class="enum">${subs.map((x) => `<button type="button" data-fsub="${esc(x)}" aria-pressed="${f.sub === x}">${esc(x)}</button>`).join('')}</div></div>` : ''}
@@ -236,7 +306,7 @@ function ddHtml() {
 function vNovoForn() {
   const n = st.ns;
   return `<div class="form">
-  <div class="fi"><span class="lab">Cartão de visita</span><label class="imgbtn first big">${n.th ? `<img src="${n.th}" alt="">` : I.cam + 'Fotografar cartão'}<input type="file" accept="image/*" capture="environment" id="nsCard" hidden></label>
+  <div class="fi"><span class="lab">Cartão de visita</span><label class="imgbtn first big">${n.th ? `<img src="${n.th}" alt="">` : I.cam + 'Fotografar cartão'}${n.edit && n.th ? '<span class="gload">Toque para trocar a foto</span>' : ''}<input type="file" accept="image/*" capture="environment" id="nsCard" hidden></label>
    <div class="hint">Com o cartão fotografado, o resto pode ficar em branco e ser preenchido depois.</div></div>
   <div class="fi"><label for="nsN" class="req">Empresa</label><input id="nsN" value="${esc(n.n)}" placeholder="Nome da empresa" autocomplete="off"></div>
   <div class="fi"><label for="nsC">Contato</label><input id="nsC" value="${esc(n.ct)}" placeholder="Opcional" autocomplete="off"></div>
@@ -261,8 +331,8 @@ function render(scroll) {
   else if (v.v === 'produto') { t = 'Produto'; h = vProduto(v.id); }
   else if (v.v === 'forn') { t = 'Fornecedores'; h = vFornecedores(); }
   else if (v.v === 'fornecedor') { const f = forn(v.id); t = f ? f.Empresa : 'Fornecedor'; h = vFornecedor(v.id); }
-  else if (v.v === 'form') { t = st.form.fixed ? 'Novo produto' : 'Produto livre'; h = vForm(); }
-  else if (v.v === 'novoforn') { t = 'Novo fornecedor'; h = vNovoForn(); }
+  else if (v.v === 'form') { t = st.form.edit ? 'Editar produto' : st.form.fixed ? 'Novo produto' : 'Produto livre'; h = vForm(); }
+  else if (v.v === 'novoforn') { t = st.ns.edit ? 'Editar fornecedor' : 'Novo fornecedor'; h = vNovoForn(); }
   render.lastBar = [t, b]; bar(t, b);
   const s = $('scr'); s.innerHTML = h; s.scrollTop = scroll || 0;
   const inForm = v.v === 'form' || v.v === 'novoforn';
@@ -278,7 +348,7 @@ function wire() {
   const fob = $('fFob'); if (fob) fob.oninput = () => { keep(); $('dl').innerHTML = deltaTxt(); };
   document.querySelectorAll('#scr [data-ph]').forEach((inp) => inp.onchange = async (e) => {
     const file = e.target.files[0]; if (!file) return; keep(); const k = +inp.dataset.ph;
-    try { const full = await compress(file, 1400, 0.74); st.form.ph[k] = full; st.form.th[k] = await reduz(full, 320, 0.7); render($('scr').scrollTop); }
+    try { const full = await compress(file, 1400, 0.74); st.form.ph[k] = full; st.form.th[k] = await reduz(full, 320, 0.7); st.form.tem[k] = true; st.form.mud[k] = true; render($('scr').scrollTop); }
     catch (err) { toast('Não consegui ler a foto. Tente de novo.'); }
   });
   const card = $('nsCard'); if (card) card.onchange = async (e) => {
@@ -301,14 +371,23 @@ async function reduz(src, max, q) {
 }
 
 /* ================= salvar ================= */
+let emEnvio = null; // id do registro que está subindo agora
+const ocupado = (id) => { if (emEnvio === id) { toast('Este registro está sendo enviado agora. Tente de novo em alguns segundos.'); return true; } return false; };
+function camposForm(f) {
+  return { ID_Projeto: f.proj || '', ID_Fornecedor: f.forn, Time: f.time, Subcategoria: f.sub, FOB_USD: num(f.fob), MOQ: num(f.moq) == null ? '' : num(f.moq), Interesse: f.int || '', Anotacoes: f.nota.trim() };
+}
+function validaForm(f) {
+  if (!f.fixed && !f.time) return 'Escolha o time.';
+  if (!f.fixed && !f.sub) return 'Escolha a subcategoria.';
+  if (!f.forn) return 'Escolha ou crie o fornecedor.';
+  if (num(f.fob) == null) return 'Preencha o FOB em dólar.';
+  return '';
+}
 async function salvarProduto() {
-  keep(); const f = st.form;
-  if (!f.fixed && !f.time) return toast('Escolha o time.');
-  if (!f.fixed && !f.sub) return toast('Escolha a subcategoria.');
-  if (!f.forn) return toast('Escolha ou crie o fornecedor.');
-  if (num(f.fob) == null) return toast('Preencha o FOB em dólar.');
+  keep(); const f = st.form; const erro = validaForm(f); if (erro) return toast(erro);
+  if (f.edit) return salvarEdicaoProduto();
   const fotos = f.ph.filter(Boolean); const thumbs = f.th.filter(Boolean);
-  const p = { ID_Produto: uid('PR'), ID_Projeto: f.proj || '', ID_Fornecedor: f.forn, Time: f.time, Subcategoria: f.sub, FOB_USD: num(f.fob), MOQ: num(f.moq) == null ? '' : num(f.moq), Interesse: f.int || '', Anotacoes: f.nota.trim(), fotos, thumb: thumbs[0] || '', Data_Hora: new Date().toISOString() };
+  const p = Object.assign({ ID_Produto: uid('PR') }, camposForm(f), { fotos, thumb: thumbs[0] || '', Data_Hora: new Date().toISOString() });
   S.outbox.push({ kind: 'prod', id: p.ID_Produto, payload: p }); S.lastSup = f.forn;
   await saveOutbox(); kvSet('lastSup', S.lastSup);
   st.form = null; st.stack.pop();
@@ -316,37 +395,188 @@ async function salvarProduto() {
   toast(navigator.onLine ? 'Produto salvo. Enviando…' : 'Produto salvo no celular. Envia sozinho quando voltar a internet.');
   sync();
 }
+async function abreEdicaoProduto(id) {
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x || ocupado(id)) return;
+  const ph = ['', '', '', ''], th = ['', '', '', ''], tem = [false, false, false, false];
+  if (x._pend) { for (let k = 0; k < 4; k++) if (x.fotos && x.fotos[k]) { ph[k] = x.fotos[k]; th[k] = await reduz(ph[k], 320, 0.7); tem[k] = true; } }
+  else {
+    const c = await fotosLocais(id); const us = urlsProduto(x);
+    for (let k = 0; k < 4; k++) { const full = c && c.f[k]; tem[k] = !!(us[k] || full); if (full) th[k] = await reduz(full, 320, 0.7); }
+    if (!tem.some(Boolean) && x.thumb) tem[0] = true;
+    const j = tem.indexOf(true); if (j >= 0 && !th[j] && x.thumb) th[j] = x.thumb;
+  }
+  st.form = { edit: id, pend: !!x._pend, fixed: false, proj: x.ID_Projeto || null, time: x.Time || null, sub: x.Subcategoria || null, forn: x.ID_Fornecedor || null,
+    fob: x.FOB_USD === '' || x.FOB_USD == null ? '' : String(x.FOB_USD).replace('.', ','), moq: x.MOQ === '' || x.MOQ == null ? '' : String(x.MOQ), int: x.Interesse || null, nota: String(x.Anotacoes || ''), ph, th, tem, mud: [], j0: tem.indexOf(true) };
+  go({ v: 'form' });
+}
+async function salvarEdicaoProduto() {
+  const f = st.form; const id = f.edit; if (ocupado(id)) return;
+  const campos = camposForm(f);
+  const pend = S.outbox.find((o) => o.kind === 'prod' && o.id === id);
+  if (pend) {
+    Object.assign(pend.payload, campos, { fotos: f.ph.filter(Boolean), thumb: f.th.filter(Boolean)[0] || '' });
+  } else {
+    const x = S.produtos.find((p) => p.ID_Produto === id); if (!x) { toast('Este produto foi apagado.'); return; }
+    const novas = {}; f.mud.forEach((m, k) => { if (m) novas[k + 1] = f.ph[k] || ''; });
+    const payload = Object.assign({ ID_Produto: id }, campos, { novasFotos: novas });
+    if (Object.keys(novas).length) {
+      const j = [0, 1, 2, 3].find((k) => f.th[k] || f.tem[k]);
+      if (j == null || j !== f.j0 || f.mud[j]) { const nt = j == null ? '' : (f.th[j] || x.thumb || ''); payload.thumb = nt; x.thumb = nt; }
+      const c = (await fotosLocais(id)) || { u: [], f: [] };
+      Object.keys(novas).forEach((k) => { c.f[k - 1] = novas[k]; c.u[k - 1] = ''; x['Foto_' + k] = novas[k] ? (x['Foto_' + k] || 'novo') : ''; });
+      await guardaFotos(id, c, false);
+    }
+    Object.assign(x, campos);
+    S.outbox.push({ kind: 'eprod', id: uid('OP'), ref: id, payload }); await saveCore();
+  }
+  S.lastSup = f.forn; kvSet('lastSup', S.lastSup); await saveOutbox();
+  st.form = null; st.stack.pop(); render(cur().scroll || 0);
+  toast(navigator.onLine ? 'Alterações salvas. Enviando…' : 'Alterações salvas no celular. Envia sozinho quando voltar a internet.');
+  sync();
+}
+async function apagarProduto(id) {
+  const x = todosProdutos().find((p) => p.ID_Produto === id); if (!x || ocupado(id)) return;
+  if (!podeApagar(x)) return toast('Só quem registrou o produto pode apagar.');
+  if (!(await confirmar('Apagar produto?', 'O registro e as fotos saem da planilha e do app de todos. Não dá para desfazer.', 'Apagar'))) return;
+  if (emEnvio === id) return toast('Este registro está sendo enviado agora. Tente de novo em alguns segundos.');
+  const eraPend = S.outbox.some((o) => o.kind === 'prod' && o.id === id);
+  S.outbox = S.outbox.filter((o) => o.id !== id && o.ref !== id);
+  if (!eraPend) { S.produtos = S.produtos.filter((p) => p.ID_Produto !== id); S.outbox.push({ kind: 'dprod', id: uid('OP'), ref: id }); await saveCore(); }
+  await saveOutbox(); apagaFotos(id);
+  back(); toast('Produto apagado.'); sync();
+}
 async function salvarFornecedor() {
   keep(); const n = st.ns;
-  if (!n.n.trim() && !n.card) return toast('Fotografe o cartão ou informe a empresa.');
-  const fo = { ID_Fornecedor: uid('FO'), Empresa: n.n.trim() || 'Novo fornecedor (ver cartão)', Contato: n.ct.trim(), Email: n.em.trim(), Telefone_WeChat: n.ph.trim(), Estande: n.st.trim(), cartao: n.card || '', thumb: n.th || '' };
-  S.outbox.unshift({ kind: 'forn', id: fo.ID_Fornecedor, payload: fo }); // fornecedores sobem antes dos produtos
+  if (!n.n.trim() && !n.card && !n.th) return toast('Fotografe o cartão ou informe a empresa.');
+  const campos = { Empresa: n.n.trim() || 'Novo fornecedor (ver cartão)', Contato: n.ct.trim(), Email: n.em.trim(), Telefone_WeChat: n.ph.trim(), Estande: n.st.trim() };
+  if (n.edit) {
+    const id = n.edit; if (ocupado(id)) return;
+    const pend = S.outbox.find((o) => o.kind === 'forn' && o.id === id);
+    if (pend) { Object.assign(pend.payload, campos); if (n.card) Object.assign(pend.payload, { cartao: n.card, thumb: n.th }); }
+    else {
+      const f = S.fornecedores.find((x) => x.ID_Fornecedor === id); if (!f) return toast('Este fornecedor foi apagado.');
+      const payload = Object.assign({ ID_Fornecedor: id }, campos);
+      if (n.card) { payload.cartao = n.card; payload.thumb = n.th; f.thumb = n.th; await guardaFotos(id, { u: [''], f: [n.card] }, false); }
+      Object.assign(f, campos); S.outbox.push({ kind: 'eforn', id: uid('OP'), ref: id, payload }); await saveCore();
+    }
+    await saveOutbox(); st.ns = null; st.stack.pop(); render(cur().scroll || 0);
+    toast(navigator.onLine ? 'Alterações salvas. Enviando…' : 'Alterações salvas no celular. Envia sozinho quando voltar a internet.');
+    return sync();
+  }
+  const fo = Object.assign({ ID_Fornecedor: uid('FO') }, campos, { cartao: n.card || '', thumb: n.th || '' });
+  S.outbox.push({ kind: 'forn', id: fo.ID_Fornecedor, payload: fo }); // na sincronização, fornecedores novos sobem antes dos produtos
   await saveOutbox();
   st.ns = null; st.stack.pop();
   if (st.form) st.form.forn = fo.ID_Fornecedor; S.lastSup = fo.ID_Fornecedor; kvSet('lastSup', S.lastSup);
   render(cur().scroll || 0); sync();
 }
+async function abreEdicaoFornecedor(id) {
+  const f = forn(id); if (!f || ocupado(id)) return;
+  let th = f.thumb || '';
+  if (!f._pend) { const c = await fotosLocais(id); if (c && c.f[0]) th = await reduz(c.f[0], 720, 0.75); }
+  st.ns = { edit: id, card: null, th, n: f.Empresa || '', ct: f.Contato || '', em: f.Email || '', ph: f.Telefone_WeChat || '', st: f.Estande || '' };
+  go({ v: 'novoforn' });
+}
+async function apagarFornecedor(id) {
+  const f = forn(id); if (!f || ocupado(id)) return;
+  if (!podeApagar(f)) return toast('Só quem cadastrou o fornecedor pode apagar.');
+  const n = todosProdutos().filter((p) => p.ID_Fornecedor === id).length;
+  if (n) return confirmar('Não dá para apagar ainda', `Este fornecedor tem ${n} produto${n > 1 ? 's' : ''}. Troque o fornecedor desse${n > 1 ? 's' : ''} produto${n > 1 ? 's' : ''} ou apague-o${n > 1 ? 's' : ''} antes.`, '');
+  if (!(await confirmar('Apagar fornecedor?', 'O cadastro e a foto do cartão saem da planilha e do app de todos. Não dá para desfazer.', 'Apagar'))) return;
+  if (emEnvio === id) return toast('Este registro está sendo enviado agora. Tente de novo em alguns segundos.');
+  const eraPend = S.outbox.some((o) => o.kind === 'forn' && o.id === id);
+  S.outbox = S.outbox.filter((o) => o.id !== id && o.ref !== id);
+  if (!eraPend) { S.fornecedores = S.fornecedores.filter((x) => x.ID_Fornecedor !== id); S.outbox.push({ kind: 'dforn', id: uid('OP'), ref: id }); await saveCore(); }
+  if (S.lastSup === id) { S.lastSup = null; kvSet('lastSup', null); }
+  await saveOutbox(); apagaFotos(id);
+  back(); toast('Fornecedor apagado.'); sync();
+}
+
+/* ================= confirmação e foto ampliada ================= */
+function confirmar(titulo, texto, botao) {
+  return new Promise((res) => {
+    const el = document.createElement('div'); el.className = 'dd conf';
+    el.innerHTML = `<div class="box"><div class="h">${esc(titulo)}</div><p>${esc(texto)}</p><div class="cb">${botao ? `<button type="button" data-r="0">Cancelar</button><button type="button" data-r="1" class="danger">${esc(botao)}</button>` : '<button type="button" data-r="0">Entendi</button>'}</div></div>`;
+    el.onclick = (e) => { const b = e.target.closest('[data-r]'); if (b || e.target === el) { el.remove(); res(!!b && b.dataset.r === '1'); } };
+    document.body.appendChild(el);
+  });
+}
+let lb = null;
+function fechaLb() { if (lb) { lb.remove(); lb = null; render($('scr').scrollTop); } }
+function abreLb(imgs, i) {
+  if (!imgs.length) return;
+  lb = document.createElement('div'); lb.className = 'lb';
+  lb.innerHTML = `<div class="lbs"><img alt=""></div><button type="button" class="lbx" aria-label="Fechar">${I.x}</button>
+   ${imgs.length > 1 ? `<button type="button" class="lbp" aria-label="Anterior">${I.back}</button><button type="button" class="lbp nx" aria-label="Próxima">${I.back}</button><div class="lbn"></div>` : ''}
+   <div class="lbh">Pinça ou toque duas vezes para ampliar</div>`;
+  const box = lb.querySelector('.lbs'), img = lb.querySelector('img'), n = lb.querySelector('.lbn');
+  let idx = i, s = 1, tx = 0, ty = 0, d0 = 0, s0 = 1, p0 = null, moved = false, lastTap = 0;
+  const apply = (anim) => { img.style.transition = anim ? 'transform .2s' : 'none'; img.style.transform = `translate(${tx}px,${ty}px) scale(${s})`; };
+  const show = (k) => { idx = (k + imgs.length) % imgs.length; img.src = imgs[idx]; s = 1; tx = 0; ty = 0; apply(false); if (n) n.textContent = `${idx + 1} de ${imgs.length}`; };
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const zoomToggle = () => { if (s > 1) { s = 1; tx = 0; ty = 0; } else s = 2.5; apply(true); };
+  box.addEventListener('touchstart', (e) => { e.preventDefault(); moved = false;
+    if (e.touches.length === 2) { d0 = dist(e.touches); s0 = s; p0 = null; } else p0 = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx, ty }; }, { passive: false });
+  box.addEventListener('touchmove', (e) => { e.preventDefault(); moved = true;
+    if (e.touches.length === 2 && d0) { s = Math.min(5, Math.max(1, s0 * dist(e.touches) / d0)); apply(false); }
+    else if (p0) { const dx = e.touches[0].clientX - p0.x, dy = e.touches[0].clientY - p0.y; tx = p0.tx + dx; ty = s > 1 ? p0.ty + dy : 0; apply(false); } }, { passive: false });
+  box.addEventListener('touchend', (e) => {
+    if (e.touches.length) { if (e.touches.length === 1) p0 = { x: e.touches[0].clientX, y: e.touches[0].clientY, tx, ty }; d0 = 0; return; }
+    if (s <= 1.03) { s = 1; if (Math.abs(tx) > 60 && imgs.length > 1) { show(idx + (tx < 0 ? 1 : -1)); return; } tx = 0; ty = 0; apply(true); }
+    if (!moved) { const now = Date.now(); if (now - lastTap < 320) { zoomToggle(); lastTap = 0; } else lastTap = now; }
+    p0 = null;
+  });
+  box.addEventListener('dblclick', zoomToggle);
+  lb.querySelector('.lbx').onclick = fechaLb;
+  lb.querySelectorAll('.lbp').forEach((b) => b.onclick = () => show(idx + (b.classList.contains('nx') ? 1 : -1)));
+  document.body.appendChild(lb); show(i);
+}
 
 /* ================= sincronização ================= */
+const ACAO = { forn: 'salvarFornecedor', prod: 'salvarProduto', eprod: 'editarProduto', dprod: 'excluirProduto', eforn: 'editarFornecedor', dforn: 'excluirFornecedor' };
+const ORDEM = { forn: 0, prod: 1 };
+function corpo(item) {
+  if (item.kind === 'forn' || item.kind === 'eforn') return { f: item.payload };
+  if (item.kind === 'prod' || item.kind === 'eprod') return { p: item.payload };
+  return { id: item.ref };
+}
+async function aplicaRetorno(item, r) {
+  const k = item.kind;
+  if (k === 'forn' || k === 'prod') {
+    const leve = Object.assign({}, item.payload); delete leve.fotos; delete leve.cartao; leve.Registrado_Por = S.email;
+    if (k === 'forn') { S.fornecedores.push(leve); if (item.payload.cartao) await guardaFotos(item.id, { u: [''], f: [item.payload.cartao] }, false); }
+    else { S.produtos.push(leve); const fs = item.payload.fotos || []; if (fs.length) await guardaFotos(item.id, { u: [], f: fs.slice(0, 4) }, false); }
+  } else if (k === 'eprod' || k === 'eforn') {
+    const lista = k === 'eprod' ? S.produtos : S.fornecedores; const key = k === 'eprod' ? 'ID_Produto' : 'ID_Fornecedor';
+    const x = lista.find((o) => o[key] === item.ref);
+    if (x && r.linha) { const th = x.thumb; Object.assign(x, r.linha); x.thumb = th; }
+    const c = FOTOS[item.ref];
+    if (c && r.linha) {
+      if (k === 'eprod') Object.keys(item.payload.novasFotos || {}).forEach((n) => { c.u[n - 1] = r.linha['Foto_' + n] || ''; });
+      else if (item.payload.cartao) c.u[0] = r.linha.Foto_Cartao || '';
+      await guardaFotos(item.ref, c, false);
+    }
+  }
+}
 async function sync(manual, completo) {
   if (syncing || !S.token) return;
   if (!navigator.onLine) { if (manual) toast(S.outbox.length ? `Sem internet. ${S.outbox.length} registro${S.outbox.length > 1 ? 's' : ''} guardado${S.outbox.length > 1 ? 's' : ''} no celular; envia sozinho quando a conexão voltar.` : 'Sem internet no momento.'); refreshBar(); return; }
-  syncing = true; refreshBar(); let mudou = false, erroRede = false;
+  syncing = true; refreshBar(); let mudou = false, erroRede = false; const avisos = [];
   try {
-    const fila = S.outbox.slice().sort((a, b) => (a.kind === 'forn' ? 0 : 1) - (b.kind === 'forn' ? 0 : 1));
+    const fila = S.outbox.slice().sort((a, b) => (ORDEM[a.kind] ?? 2) - (ORDEM[b.kind] ?? 2));
     for (const item of fila) {
+      if (!S.outbox.includes(item)) continue; // apagado enquanto a fila andava
+      emEnvio = item.ref || item.id;
       try {
-        if (item.kind === 'forn') await api('salvarFornecedor', { f: item.payload });
-        else await api('salvarProduto', { p: item.payload });
-        S.outbox = S.outbox.filter((o) => o.id !== item.id); await saveOutbox();
-        const leve = Object.assign({}, item.payload); delete leve.fotos; delete leve.cartao; leve.Registrado_Por = S.email;
-        if (item.kind === 'forn') S.fornecedores.push(leve); else S.produtos.push(leve);
-        mudou = true;
+        const r = await api(ACAO[item.kind], corpo(item));
+        S.outbox = S.outbox.filter((o) => o !== item); await saveOutbox();
+        await aplicaRetorno(item, r); mudou = true;
       } catch (e) {
         if (e instanceof LoginErr) throw e;
         if (!e.servidor) { erroRede = true; break; }
-        item.erro = e.message; // erro do servidor: segue com os próximos
-      }
+        if (item.kind === 'forn' || item.kind === 'prod') item.erro = e.message; // segue com os próximos
+        else { S.outbox = S.outbox.filter((o) => o !== item); await saveOutbox(); avisos.push(e.message); completo = true; mudou = true; }
+      } finally { emEnvio = null; }
     }
     if (!erroRede) {
       const r = await api('dados', { desde: completo ? '' : S.agora });
@@ -357,8 +587,11 @@ async function sync(manual, completo) {
         if (r.projetos && r.projetos.length) { S.projetos = r.projetos; S.times = r.times; await Promise.all([kvSet('projetos', S.projetos), kvSet('times', S.times)]); }
         mudou = true;
       } else {
-        if (r.produtos.length || r.fornecedores.length) mudou = true;
+        const ap = r.apagados || { produtos: [], fornecedores: [] };
+        if (r.produtos.length || r.fornecedores.length || ap.produtos.length || ap.fornecedores.length) mudou = true;
         merge(S.produtos, r.produtos, 'ID_Produto'); merge(S.fornecedores, r.fornecedores, 'ID_Fornecedor');
+        if (ap.produtos.length) S.produtos = S.produtos.filter((x) => !ap.produtos.includes(x.ID_Produto));
+        if (ap.fornecedores.length) S.fornecedores = S.fornecedores.filter((x) => !ap.fornecedores.includes(x.ID_Fornecedor));
       }
       S.agora = r.agora; await saveCore();
       if (!S.img || !S.img.app || !S.img.app.capa) { try { await baixaImagens(); mudou = true; } catch (e) {} }
@@ -368,7 +601,8 @@ async function sync(manual, completo) {
   } finally {
     syncing = false;
     const v = cur().v;
-    if (mudou && v !== 'form' && v !== 'novoforn') render($('scr').scrollTop); else refreshBar();
+    if (avisos.length) toast(avisos[0]);
+    if (mudou && v !== 'form' && v !== 'novoforn' && !lb) render($('scr').scrollTop); else refreshBar();
   }
 }
 async function baixaImagens() { const r = await api('imagens', {}); S.img = r.pacote; await kvSet('img', S.img); }
@@ -451,13 +685,19 @@ document.addEventListener('click', (e) => {
   if ((el = e.target.closest('[data-fint]'))) { keep(); st.form.int = st.form.int === el.dataset.fint ? null : el.dataset.fint; render($('scr').scrollTop); return; }
   if ((el = e.target.closest('[data-time]'))) { go({ v: 'time', time: el.dataset.time }); return; }
   if ((el = e.target.closest('[data-proj]'))) { go({ v: 'projeto', id: el.dataset.proj }); return; }
-  if ((el = e.target.closest('[data-prod]'))) { go({ v: 'produto', id: el.dataset.prod }); return; }
-  if ((el = e.target.closest('[data-forn]'))) { go({ v: 'fornecedor', id: el.dataset.forn }); return; }
+  if ((el = e.target.closest('[data-rm]'))) { keep(); const k = +el.dataset.rm; const f = st.form; f.ph[k] = ''; f.th[k] = ''; f.tem[k] = false; f.mud[k] = true; render($('scr').scrollTop); return; }
+  if ((el = e.target.closest('[data-zoom]'))) { const imgs = galAtual.filter(Boolean); const i = galAtual.slice(0, +el.dataset.zoom).filter(Boolean).length; abreLb(imgs, i); return; }
+  if ((el = e.target.closest('[data-prod]'))) { TENTOU.delete(el.dataset.prod); go({ v: 'produto', id: el.dataset.prod }); return; }
+  if ((el = e.target.closest('[data-forn]'))) { TENTOU.delete(el.dataset.forn); go({ v: 'fornecedor', id: el.dataset.forn }); return; }
   if (!(el = e.target.closest('[data-go]'))) return;
   const a = el.dataset.go;
   if (a === 'ddclose') { if (e.target === el) { st.dd = false; st.ddq = ''; render($('scr').scrollTop); } return; }
   if (a === 'back') { if (cur().v === 'form') { st.form = null; st.dd = false; } if (cur().v === 'novoforn') st.ns = null; back(); return; }
-  if (a === 'sync') { sync(true); return; }
+  if (a === 'sync') { sync(true, true); return; }
+  if (a === 'editprod') { abreEdicaoProduto(cur().id); return; }
+  if (a === 'delprod') { apagarProduto(cur().id); return; }
+  if (a === 'editforn') { abreEdicaoFornecedor(cur().id); return; }
+  if (a === 'delforn') { apagarFornecedor(cur().id); return; }
   if (a === 'novo') { const v = cur(); novoForm(null, v.v === 'time' ? v.time : null); return; }
   if (a === 'novoproj') { novoForm(cur().id); return; }
   if (a === 'dd') { keep(); st.dd = true; st.ddq = ''; render($('scr').scrollTop); return; }

@@ -7,6 +7,10 @@
  *   imagens      {token}                      -> capa, times e fotos de referencia (base64), versao
  *   salvarFornecedor {token, f}               -> grava fornecedor (idempotente pelo ID)
  *   salvarProduto    {token, p}               -> grava produto + fotos no Drive (idempotente pelo ID)
+ *   editarProduto    {token, p}               -> altera campos e/ou troca fotos de um produto
+ *   excluirProduto   {token, id}              -> apaga (so quem registrou ou o administrador)
+ *   editarFornecedor {token, f} / excluirFornecedor {token, id}
+ *   foto             {token, id}              -> foto em alta (base64) de produto ou cartao
  */
 
 const CFG = {
@@ -18,6 +22,7 @@ const CFG = {
   IMG_APP: '1wN99pnSr5YA09HuvIbrzm8vLXSKWsoSA',            // capa e times
   IMG_PROJ: '1mSFqqQLXMm5I3Aa-QoWEjSql7zrdVL_l',           // fotos de referencia P0xx.jpg
   DOMINIO: '@westwing.com.br',
+  ADMIN: 'renato.martins@westwing.com.br',
   DIAS_TOKEN: 60,
   TZ: 'America/Sao_Paulo'
 };
@@ -25,7 +30,8 @@ const CFG = {
 function doPost(e) {
   try {
     const d = JSON.parse(e.postData.contents || '{}');
-    const acoes = { pedirCodigo, entrar, dados, imagens, salvarFornecedor, salvarProduto };
+    const acoes = { pedirCodigo, entrar, dados, imagens, salvarFornecedor, salvarProduto,
+      editarProduto, excluirProduto, editarFornecedor, excluirFornecedor, foto };
     const fn = acoes[d.acao];
     if (!fn) return out({ ok: false, erro: 'acao desconhecida' });
     return out(fn(d));
@@ -102,11 +108,15 @@ function dados(d) {
   usuario_(d.token);
   const desde = String(d.desde || '');
   const thumbs = miniaturas_();
-  const prod = tabela_(CFG.PRODUTOS).filter(r => r.ID_Produto && (!desde || String(r.Data_Hora) > desde))
+  // edicoes e exclusoes recentes (registro leve nas propriedades do script, sem mexer nas planilhas)
+  const log = desde ? mudancas_().filter(m => m.t >= desde) : [];
+  const edP = {}, edF = {}; log.forEach(m => { if (!m.d) (m.k === 'p' ? edP : edF)[m.id] = 1; });
+  const prod = tabela_(CFG.PRODUTOS).filter(r => r.ID_Produto && (!desde || String(r.Data_Hora) > desde || edP[r.ID_Produto]))
     .map(r => Object.assign(r, { thumb: thumbs[r.ID_Produto] || '' }));
-  const forn = tabela_(CFG.FORNECEDORES).filter(r => r.ID_Fornecedor && (!desde || String(r.Data_Hora) > desde))
+  const forn = tabela_(CFG.FORNECEDORES).filter(r => r.ID_Fornecedor && (!desde || String(r.Data_Hora) > desde || edF[r.ID_Fornecedor]))
     .map(r => Object.assign(r, { thumb: thumbs[r.ID_Fornecedor] || '' }));
-  const res = { ok: true, agora: fmt_(new Date()), produtos: prod, fornecedores: forn };
+  const res = { ok: true, agora: fmt_(new Date()), produtos: prod, fornecedores: forn,
+    apagados: { produtos: log.filter(m => m.d && m.k === 'p').map(m => m.id), fornecedores: log.filter(m => m.d && m.k === 'f').map(m => m.id) } };
   if (!desde) { res.projetos = tabela_(CFG.PROJETOS); res.times = tabela_(CFG.TIMES); }
   return res;
 }
@@ -189,6 +199,106 @@ function salvarProduto(d) {
     if (p.thumb) planilhaMini_().appendRow([p.ID_Produto, p.thumb]);
     return { ok: true };
   } finally { lock.releaseLock(); }
+}
+
+// ---------------- edicao e exclusao ----------------
+function linhaDe_(sh, id) {
+  const n = sh.getLastRow(); if (n < 2) return -1;
+  const ids = sh.getRange(2, 1, n - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (ids[i][0] === id) return i + 2;
+  return -1;
+}
+function objeto_(sh, row) {
+  const h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const v = sh.getRange(row, 1, 1, h.length).getValues()[0]; const o = {};
+  h.forEach((k, i) => o[k] = v[i] instanceof Date ? fmt_(v[i]) : v[i]); return o;
+}
+function gravaObjeto_(sh, row, o) { sh.getRange(row, 1, 1, sh.getLastColumn()).setValues([porCabecalho_(sh, o)]); }
+function miniatura_(id, thumb) {
+  const sh = planilhaMini_(); const row = linhaDe_(sh, id);
+  if (!thumb) { if (row > 0) sh.deleteRow(row); return; }
+  if (row > 0) sh.getRange(row, 2).setValue(thumb); else sh.appendRow([id, thumb]);
+}
+function idDaUrl_(u) { const m = String(u || '').match(/[-\w]{25,}/); return m ? m[0] : ''; }
+function lixo_(u) { const id = idDaUrl_(u); if (id) try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} }
+function mudancas_() { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('LOG_MUDANCAS') || '[]'); } catch (e) { return []; } }
+function registraMudanca_(k, id, apagado) {
+  let log = mudancas_(); log.push({ t: fmt_(new Date()), k: k, id: id, d: apagado ? 1 : 0 });
+  if (log.length > 120) log = log.slice(-120);
+  PropertiesService.getScriptProperties().setProperty('LOG_MUDANCAS', JSON.stringify(log));
+}
+function podeApagar_(email, autor) { return email === CFG.ADMIN || String(autor || '').toLowerCase() === email; }
+
+function editarProduto(d) {
+  usuario_(d.token); const p = d.p || {};
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = SpreadsheetApp.openById(CFG.PRODUTOS).getSheets()[0];
+    const row = linhaDe_(sh, p.ID_Produto); if (row < 0) throw new Error('Produto não encontrado (pode ter sido apagado).');
+    const o = objeto_(sh, row);
+    ['ID_Projeto', 'ID_Fornecedor', 'Time', 'Subcategoria', 'FOB_USD', 'MOQ', 'Interesse', 'Anotacoes'].forEach(k => { if (p[k] !== undefined) o[k] = p[k]; });
+    const pasta = pastaFotos_('Fotos_Produtos');
+    Object.keys(p.novasFotos || {}).forEach(k => {
+      const col = 'Foto_' + k; if (!/^Foto_[1-4]$/.test(col)) return;
+      if (o[col]) lixo_(o[col]);
+      o[col] = p.novasFotos[k] ? salvaFoto_(pasta, p.ID_Produto + '_' + k + '_' + Date.now(), p.novasFotos[k]) : '';
+    });
+    gravaObjeto_(sh, row, o);
+    if (p.thumb !== undefined) miniatura_(p.ID_Produto, p.thumb);
+    registraMudanca_('p', p.ID_Produto, false);
+    return { ok: true, linha: o };
+  } finally { lock.releaseLock(); }
+}
+function excluirProduto(d) {
+  const email = usuario_(d.token);
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = SpreadsheetApp.openById(CFG.PRODUTOS).getSheets()[0];
+    const row = linhaDe_(sh, d.id); if (row < 0) return { ok: true, jaApagado: true };
+    const o = objeto_(sh, row);
+    if (!podeApagar_(email, o.Registrado_Por)) throw new Error('Só quem registrou o produto pode apagar.');
+    [1, 2, 3, 4].forEach(i => lixo_(o['Foto_' + i]));
+    sh.deleteRow(row); miniatura_(d.id, '');
+    registraMudanca_('p', d.id, true);
+    return { ok: true };
+  } finally { lock.releaseLock(); }
+}
+function editarFornecedor(d) {
+  usuario_(d.token); const f = d.f || {};
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = SpreadsheetApp.openById(CFG.FORNECEDORES).getSheets()[0];
+    const row = linhaDe_(sh, f.ID_Fornecedor); if (row < 0) throw new Error('Fornecedor não encontrado (pode ter sido apagado).');
+    const o = objeto_(sh, row);
+    ['Empresa', 'Contato', 'Email', 'Telefone_WeChat', 'Estande'].forEach(k => { if (f[k] !== undefined) o[k] = f[k]; });
+    if (f.cartao) { if (o.Foto_Cartao) lixo_(o.Foto_Cartao); o.Foto_Cartao = salvaFoto_(pastaFotos_('Fotos_Cartoes'), f.ID_Fornecedor + '_' + Date.now(), f.cartao); }
+    gravaObjeto_(sh, row, o);
+    if (f.thumb) miniatura_(f.ID_Fornecedor, f.thumb);
+    registraMudanca_('f', f.ID_Fornecedor, false);
+    return { ok: true, linha: o };
+  } finally { lock.releaseLock(); }
+}
+function excluirFornecedor(d) {
+  const email = usuario_(d.token);
+  const lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    const sh = SpreadsheetApp.openById(CFG.FORNECEDORES).getSheets()[0];
+    const row = linhaDe_(sh, d.id); if (row < 0) return { ok: true, jaApagado: true };
+    const o = objeto_(sh, row);
+    if (!podeApagar_(email, o.Registrado_Por)) throw new Error('Só quem cadastrou o fornecedor pode apagar.');
+    const n = tabela_(CFG.PRODUTOS).filter(r => r.ID_Fornecedor === d.id).length;
+    if (n) throw new Error('Este fornecedor tem ' + n + ' produto(s). Troque o fornecedor deles ou apague-os antes.');
+    lixo_(o.Foto_Cartao); sh.deleteRow(row); miniatura_(d.id, '');
+    registraMudanca_('f', d.id, true);
+    return { ok: true };
+  } finally { lock.releaseLock(); }
+}
+function foto(d) {
+  usuario_(d.token);
+  const f = DriveApp.getFileById(idDaUrl_(d.id) || d.id);
+  const pais = []; const it = f.getParents(); while (it.hasNext()) pais.push(it.next().getName());
+  if (!pais.some(n => n === 'Fotos_Produtos' || n === 'Fotos_Cartoes')) throw new Error('Foto não permitida.');
+  return { ok: true, foto: 'data:' + f.getMimeType() + ';base64,' + Utilities.base64Encode(f.getBlob().getBytes()) };
 }
 
 // Rode uma vez pelo editor para autorizar planilhas, Drive e e-mail.
